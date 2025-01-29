@@ -7,6 +7,14 @@ from   evaluate import compute_sad_loss, compute_mse_loss, compute_mad_loss
 import argparse
 from tqdm import tqdm
 
+# Список поддерживаемых форматов изображений
+VALID_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif']
+
+def is_image(file_name):
+    """Проверка, является ли файл изображением на основе расширения."""
+    return any(file_name.lower().endswith(ext) for ext in VALID_IMAGE_EXTENSIONS)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pred-dir', type=str, default='path/to/outputs/ppm100', help="pred alpha dir")
@@ -23,6 +31,8 @@ if __name__ == '__main__':
     #sad_loss_unknown = []
     
     for img in tqdm(os.listdir(args.label_dir)):
+        if not is_image(img):
+            continue
         print(img)
         #pred = cv2.imread(os.path.join(args.pred_dir, img.replace('.png', '.jpg')), 0).astype(np.float32)
         pred = cv2.imread(os.path.join(args.pred_dir, img.replace('.jpg', '.png')), 0).astype(np.float32)

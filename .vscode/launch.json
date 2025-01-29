@@ -1,0 +1,65 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Start train",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--phase", "train",
+                "--config", "/app/config/MAM-ViTB-8gpu.toml"
+            ],
+            "justMyCode": false,
+        },
+
+        {
+            "name": "processing",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/inference_benchmark.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--checkpoint", "/app/checkpoints/grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_5000.pth",
+                "--config", "/app/config/MAM-ViTB-8gpu.toml",
+                "--benchmark", "am2k",
+                "--output", "outputs/sam_2_am2k",
+                "--postprocess"
+            ],
+            "justMyCode": false,
+        },
+
+        {
+            "name": "bench_am2k",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/evaluation/evaluation_am2k.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--pred-dir", "outputs/sam_2_am2k",
+                "--label-dir", "/app/datasets/AM-2k-20250125T084638Z-001/AM-2k/validation/mask",
+                "--detailmap-dir", "/app/datasets/AM-2k-20250125T084638Z-001/AM-2k/validation/trimap"
+            ],
+            "justMyCode": false,
+        },
+
+        {
+            "name": "bench_ppm100",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/evaluation/evaluation_ppm100.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--pred-dir", "outputs/sam_2_ppm100",
+                "--label-dir", "/app/datasets/PPM-100/PPM-100/matte",
+                "--detailmap-dir", "/app/datasets/PPM-100/PPM-100/matte"
+            ],
+            "justMyCode": false,
+        }
+
+    ]
+}

@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  matting_anything:
+    build: .
+    container_name: MattingAnything
+    shm_size: '4gb'
+    volumes:
+      - .:/app
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

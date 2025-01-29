@@ -2,7 +2,6 @@
 # Modified from MGMatting (https://github.com/yucornetto/MGMatting)
 # ------------------------------------------------------------------------
 import os
-import numpy as np
 import random
 
 import torch
@@ -10,15 +9,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils as nn_utils
 import torch.backends.cudnn as cudnn
-from   torch.nn import SyncBatchNorm
 import torch.optim.lr_scheduler as lr_scheduler
-from   torch.nn.parallel import DistributedDataParallel
+from tqdm import tqdm
+
 
 import utils
 from   utils import CONFIG
 import networks
-import wandb
-import cv2
+from networks.generator_m2m_sam_2 import sam2_get_generator_m2m
 
 class Trainer(object):
 
@@ -87,22 +85,16 @@ class Trainer(object):
 
     def build_model(self):
 
-        self.G = networks.get_generator_m2m(seg=self.model_config.arch.seg, m2m=self.model_config.arch.m2m)
+        # self.G = networks.get_generator_m2m(seg=self.model_config.arch.seg, m2m=self.model_config.arch.m2m)
+        self.G = sam2_get_generator_m2m(seg=self.model_config.arch.seg, m2m=self.model_config.arch.m2m)
+        
         self.G.cuda()
-
-        if CONFIG.dist:
-            self.logger.info("Using pytorch synced BN")
-            self.G = SyncBatchNorm.convert_sync_batchnorm(self.G)
 
         self.G_optimizer = torch.optim.Adam(self.G.parameters(),
                                             lr = self.train_config.G_lr,
                                             betas = [self.train_config.beta1, self.train_config.beta2])
 
-        if CONFIG.dist:
-            # SyncBatchNorm only supports DistributedDataParallel with single GPU per process
-            self.G = DistributedDataParallel(self.G, device_ids=[CONFIG.local_rank], output_device=CONFIG.local_rank, find_unused_parameters=True)
-        else:
-            self.G = nn.DataParallel(self.G)
+        # self.G = nn.DataParallel(self.G)
 
         self.build_lr_scheduler()
 
@@ -111,6 +103,14 @@ class Trainer(object):
         self.G_scheduler = lr_scheduler.CosineAnnealingLR(self.G_optimizer,
                                                           T_max=self.train_config.total_step
                                                                 - self.train_config.warmup_step)
+        
+    #     self.G_scheduler = lr_scheduler.ReduceLROnPlateau(
+    #     self.G_optimizer,
+    #     mode='min',
+    #     factor=0.5,
+    #     patience=self.train_config.lr_plateau_patience,  # Добавьте этот параметр в конфигурацию
+    #     verbose=True,
+    # )
 
     def reset_grad(self):
         """Reset the gradient buffers."""
@@ -118,16 +118,21 @@ class Trainer(object):
 
 
     def restore_model(self, resume_checkpoint):
-        """
-        Restore the trained generator and discriminator.
-        :param resume_checkpoint: File name of checkpoint
-        :return:
-        """
         pth_path = os.path.join(self.log_config.checkpoint_path, '{}.pth'.format(resume_checkpoint))
-        checkpoint = torch.load(pth_path, map_location = lambda storage, loc: storage.cuda(CONFIG.gpu))
+        checkpoint = torch.load(pth_path, map_location=lambda storage, loc: storage.cuda(CONFIG.gpu))
         self.resume_step = checkpoint['iter']
         self.logger.info('Loading the trained models from step {}...'.format(self.resume_step))
-        self.G.load_state_dict(checkpoint['state_dict'], strict=True)
+
+        state_dict = checkpoint['state_dict']
+        # Проверяем, есть ли префикс 'module.' и удаляем его
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('module.'):
+                new_state_dict[k[7:]] = v
+            else:
+                new_state_dict[k] = v
+
+        self.G.m2m.load_state_dict(new_state_dict, strict=True)
 
         if not self.train_config.reset_lr:
             if 'opt_state_dict' in checkpoint.keys():
@@ -145,166 +150,180 @@ class Trainer(object):
                     self.logger.error("{}".format(ve))
         else:
             self.G_scheduler = lr_scheduler.CosineAnnealingLR(self.G_optimizer,
-                                                              T_max=self.train_config.total_step - self.resume_step - 1)
+                                                            T_max=self.train_config.total_step - self.resume_step - 1)
+            
+            # self.G_scheduler = lr_scheduler.ReduceLROnPlateau(
+            #     self.G_optimizer,
+            #     mode='min',
+            #     factor=0.5,
+            #     patience=self.train_config.lr_plateau_patience,  # Добавьте этот параметр в конфигурацию
+            #     verbose=True,
+            #     min_lr=1e-6
+            # )
 
         if 'loss' in checkpoint.keys():
             self.best_loss = checkpoint['loss']
 
-    def train(self):
-        data_iter = iter(self.train_dataloader)
 
+    def train(self):
+        # Определяем количество шагов (итераций) в одной эпохе
+        steps_per_epoch = len(self.train_dataloader)
+        
         if self.train_config.resume_checkpoint:
             start = self.resume_step + 1
         else:
             start = 0
-
+        
         moving_max_grad = 0
         moving_grad_moment = 0.999
         max_grad = 0
-
-        for step in range(start, self.train_config.total_step + 1):
-            try:
-                image_dict = next(data_iter)
-            except:
-                data_iter = iter(self.train_dataloader)
-                image_dict = next(data_iter)
-
-            image, alpha, trimap, bbox = image_dict['image'], image_dict['alpha'], image_dict['trimap'], image_dict['boxes']
-            image = image.cuda()
-            alpha = alpha.cuda()
-            trimap = trimap.cuda()
-            bbox = bbox.cuda()
-            # train() of DistributedDataParallel has no return
-            self.G.train()
-            log_info = ""
-            loss = 0
-
-            """===== Update Learning Rate ====="""
-            if step < self.train_config.warmup_step and self.train_config.resume_checkpoint is None:
-                cur_G_lr = utils.warmup_lr(self.train_config.G_lr, step + 1, self.train_config.warmup_step)
-                utils.update_lr(cur_G_lr, self.G_optimizer)
-
-            else:
-                self.G_scheduler.step()
-                cur_G_lr = self.G_scheduler.get_lr()[0]
-
-            """===== Forward G ====="""
-            pred = self.G(image, bbox)
+        
+        # Определяем количество эпох на основе total_step и steps_per_epoch
+        total_epochs = (self.train_config.total_step + steps_per_epoch - 1) // steps_per_epoch
+        
+        for epoch in range(1, total_epochs + 1):
+            self.logger.info(f"Starting Epoch {epoch}/{total_epochs}")
+            epoch_loss = 0.0
             
-            alpha_pred_os1, alpha_pred_os4, alpha_pred_os8 = pred['alpha_os1'], pred['alpha_os4'], pred['alpha_os8']
-            mask = pred['mask']
+            # Создаём прогресс-бар для текущей эпохи
+            progress_bar = tqdm(enumerate(self.train_dataloader, 1), total=steps_per_epoch, desc=f"Epoch {epoch}/{total_epochs}")
             
-            weight_os8 = utils.get_unknown_tensor(mask)
-            weight_os8[...] = 1
+            for batch_idx, image_dict in progress_bar:
+                # Проверка, достигли ли мы общего количества шагов
+                current_step = (epoch - 1) * steps_per_epoch + batch_idx
+                if current_step > self.train_config.total_step:
+                    break
+                
+                image, alpha, trimap, bbox = image_dict['image'], image_dict['alpha'], image_dict['trimap'], image_dict['boxes']
+                image = image.cuda()
+                alpha = alpha.cuda()
+                trimap = trimap.cuda()
+                bbox = bbox.cuda()
+                
+                self.G.train()
+                log_info = ""
+                loss = 0.0
 
-            if step < self.train_config.warmup_step:
-                weight_os4 = utils.get_unknown_tensor(mask)
-                weight_os1 = utils.get_unknown_tensor(mask)
-                weight_os4[...] = 1
-                weight_os1[...] = 1
-            elif step < self.train_config.warmup_step * 3:
-                if random.randint(0,1) == 0:
+                """===== Update Learning Rate ====="""
+                if current_step < self.train_config.warmup_step and self.train_config.resume_checkpoint is None:
+                    cur_G_lr = utils.warmup_lr(self.train_config.G_lr, current_step, self.train_config.warmup_step)
+                    utils.update_lr(cur_G_lr, self.G_optimizer)
+                else:
+                    self.G_scheduler.step()
+                    cur_G_lr = self.G_scheduler.get_last_lr()[0]  # Используем get_last_lr() вместо get_lr()
+                                
+                """===== Forward G ====="""
+                pred = self.G(image, bbox)
+                
+                alpha_pred_os1, alpha_pred_os4, alpha_pred_os8 = pred['alpha_os1'], pred['alpha_os4'], pred['alpha_os8']
+                mask = pred['mask']
+                
+                weight_os8 = utils.get_unknown_tensor(mask)
+                weight_os8[...] = 1
+
+                if current_step < self.train_config.warmup_step:
                     weight_os4 = utils.get_unknown_tensor(mask)
                     weight_os1 = utils.get_unknown_tensor(mask)
+                    weight_os4[...] = 1
+                    weight_os1[...] = 1
+                elif current_step < self.train_config.warmup_step * 3:
+                    if random.randint(0,1) == 0:
+                        weight_os4 = utils.get_unknown_tensor(mask)
+                        weight_os1 = utils.get_unknown_tensor(mask)
+                    else:
+                        weight_os4 = utils.get_unknown_tensor(trimap)
+                        weight_os1 = utils.get_unknown_tensor(trimap)
                 else:
-                    weight_os4 = utils.get_unknown_tensor(trimap)
-                    weight_os1 = utils.get_unknown_tensor(trimap)
-            else:
-                if random.randint(0,1) == 0:
-                    weight_os4 = utils.get_unknown_tensor(trimap)
-                    weight_os1 = utils.get_unknown_tensor(trimap)
-                else:
-                    weight_os4 = utils.get_unknown_tensor_from_pred(alpha_pred_os8, rand_width=CONFIG.model.self_refine_width1, train_mode=True)
-                    weight_os1 = utils.get_unknown_tensor_from_pred(alpha_pred_os4, rand_width=CONFIG.model.self_refine_width2, train_mode=True)
-            
-            if self.train_config.rec_weight > 0:
-                self.loss_dict['rec_os1'] = self.regression_loss(alpha_pred_os1, alpha, loss_type='l1', weight=weight_os1) * 2 / 5.0 * self.train_config.rec_weight
-                self.loss_dict['rec_os4'] = self.regression_loss(alpha_pred_os4, alpha, loss_type='l1', weight=weight_os4) * 1 / 5.0 * self.train_config.rec_weight
-                self.loss_dict['rec_os8'] = self.regression_loss(alpha_pred_os8, alpha, loss_type='l1', weight=weight_os8) * 1 / 5.0 * self.train_config.rec_weight
+                    if random.randint(0,1) == 0:
+                        weight_os4 = utils.get_unknown_tensor(trimap)
+                        weight_os1 = utils.get_unknown_tensor(trimap)
+                    else:
+                        weight_os4 = utils.get_unknown_tensor_from_pred(alpha_pred_os8, rand_width=CONFIG.model.self_refine_width1, train_mode=True)
+                        weight_os1 = utils.get_unknown_tensor_from_pred(alpha_pred_os4, rand_width=CONFIG.model.self_refine_width2, train_mode=True)
+                
+                if self.train_config.rec_weight > 0:
+                    self.loss_dict['rec_os1'] = self.regression_loss(alpha_pred_os1, alpha, loss_type='l1', weight=weight_os1) * 2 / 5.0 * self.train_config.rec_weight
+                    self.loss_dict['rec_os4'] = self.regression_loss(alpha_pred_os4, alpha, loss_type='l1', weight=weight_os4) * 1 / 5.0 * self.train_config.rec_weight
+                    self.loss_dict['rec_os8'] = self.regression_loss(alpha_pred_os8, alpha, loss_type='l1', weight=weight_os8) * 1 / 5.0 * self.train_config.rec_weight
 
-            if self.train_config.comp_weight > 0:
-                self.loss_dict['comp_os1'] = self.composition_loss(alpha_pred_os1, fg_norm, bg_norm, image, weight=weight_os1) * 2 / 5.0 * self.train_config.comp_weight
-                self.loss_dict['comp_os4'] = self.composition_loss(alpha_pred_os4, fg_norm, bg_norm, image, weight=weight_os4) * 1 / 5.0 * self.train_config.comp_weight
-                self.loss_dict['comp_os8'] = self.composition_loss(alpha_pred_os8, fg_norm, bg_norm, image, weight=weight_os8) * 1 / 5.0 * self.train_config.comp_weight
+                # if self.train_config.comp_weight > 0:
+                #     self.loss_dict['comp_os1'] = self.composition_loss(alpha_pred_os1, fg_norm, bg_norm, image, weight=weight_os1) * 2 / 5.0 * self.train_config.comp_weight
+                #     self.loss_dict['comp_os4'] = self.composition_loss(alpha_pred_os4, fg_norm, bg_norm, image, weight=weight_os4) * 1 / 5.0 * self.train_config.comp_weight
+                #     self.loss_dict['comp_os8'] = self.composition_loss(alpha_pred_os8, fg_norm, bg_norm, image, weight=weight_os8) * 1 / 5.0 * self.train_config.comp_weight
 
-            if self.train_config.lap_weight > 0:
-                self.loss_dict['lap_os1'] = self.lap_loss(logit=alpha_pred_os1, target=alpha, gauss_filter=self.gauss_filter, loss_type='l1', weight=weight_os1) * 2 / 5.0 * self.train_config.lap_weight
-                self.loss_dict['lap_os4'] = self.lap_loss(logit=alpha_pred_os4, target=alpha, gauss_filter=self.gauss_filter, loss_type='l1', weight=weight_os4) * 1 / 5.0 * self.train_config.lap_weight
-                self.loss_dict['lap_os8'] = self.lap_loss(logit=alpha_pred_os8, target=alpha, gauss_filter=self.gauss_filter, loss_type='l1', weight=weight_os8) * 1 / 5.0 * self.train_config.lap_weight
+                if self.train_config.lap_weight > 0:
+                    self.loss_dict['lap_os1'] = self.lap_loss(logit=alpha_pred_os1, target=alpha, gauss_filter=self.gauss_filter, loss_type='l1', weight=weight_os1) * 2 / 5.0 * self.train_config.lap_weight
+                    self.loss_dict['lap_os4'] = self.lap_loss(logit=alpha_pred_os4, target=alpha, gauss_filter=self.gauss_filter, loss_type='l1', weight=weight_os4) * 1 / 5.0 * self.train_config.lap_weight
+                    self.loss_dict['lap_os8'] = self.lap_loss(logit=alpha_pred_os8, target=alpha, gauss_filter=self.gauss_filter, loss_type='l1', weight=weight_os8) * 1 / 5.0 * self.train_config.lap_weight
 
-            for loss_key in self.loss_dict.keys():
-                if self.loss_dict[loss_key] is not None:
-                    loss += self.loss_dict[loss_key]
-
-            """===== Back Propagate ====="""
-            self.reset_grad()
-
-            loss.backward()
-
-            """===== Clip Large Gradient ====="""
-            if self.train_config.clip_grad:
-                if moving_max_grad == 0:
-                    moving_max_grad = nn_utils.clip_grad_norm_(self.G.parameters(), 1e+6)
-                    max_grad = moving_max_grad
-                else:
-                    max_grad = nn_utils.clip_grad_norm_(self.G.parameters(), 2 * moving_max_grad)
-                    moving_max_grad = moving_max_grad * moving_grad_moment + max_grad * (
-                                1 - moving_grad_moment)
-
-            """===== Update Parameters ====="""
-            self.G_optimizer.step()
-
-            """===== Write Log and Tensorboard ====="""
-            # stdout log
-            if step % self.log_config.logging_step == 0:
-                # reduce losses from GPUs
-                if CONFIG.dist:
-                    self.loss_dict = utils.reduce_tensor_dict(self.loss_dict, mode='mean')
-                    loss = utils.reduce_tensor(loss)
-                # create logging information
                 for loss_key in self.loss_dict.keys():
                     if self.loss_dict[loss_key] is not None:
-                        log_info += loss_key.upper() + ": {:.4f}, ".format(self.loss_dict[loss_key])
-                        
-                if CONFIG.wandb and CONFIG.local_rank == 0:
+                        loss += self.loss_dict[loss_key]
+                        epoch_loss += self.loss_dict[loss_key].item()
+
+                """===== Back Propagate ====="""
+                self.reset_grad()
+                loss.backward()
+
+                """===== Clip Large Gradient ====="""
+                if self.train_config.clip_grad:
+                    if moving_max_grad == 0:
+                        moving_max_grad = nn_utils.clip_grad_norm_(self.G.parameters(), 1e+6)
+                        max_grad = moving_max_grad
+                    else:
+                        max_grad = nn_utils.clip_grad_norm_(self.G.parameters(), 2 * moving_max_grad)
+                        moving_max_grad = moving_max_grad * moving_grad_moment + max_grad * (1 - moving_grad_moment)
+
+                """===== Update Parameters ====="""
+                self.G_optimizer.step()
+
+                """===== Write Log and Tensorboard ====="""
+                if current_step % self.log_config.logging_step == 0:
+                    # Создаём логирующую информацию
                     for loss_key in self.loss_dict.keys():
                         if self.loss_dict[loss_key] is not None:
-                            wandb.log({'lr': cur_G_lr, 'total_loss': loss, loss_key.upper(): self.loss_dict[loss_key]}, step=step)
-                
-                self.logger.debug("Image tensor shape: {}. Trimap tensor shape: {}".format(image.shape, trimap.shape))
-                log_info = "[{}/{}], ".format(step, self.train_config.total_step) + log_info
-                log_info += "lr: {:6f}".format(cur_G_lr)
-                self.logger.info(log_info)
+                            log_info += loss_key.upper() + ": {:.4f}, ".format(self.loss_dict[loss_key].item())
+                    
+                    self.logger.debug(f"Image tensor shape: {image.shape}. Trimap tensor shape: {trimap.shape}")
+                    log_info = f"Epoch [{epoch}/{total_epochs}], Step [{batch_idx}/{steps_per_epoch}], " + log_info
+                    log_info += f"LR: {cur_G_lr:.6f}"
+                    self.logger.info(log_info)
 
-                # tensorboard
-                if step % self.log_config.tensorboard_step == 0 or step == start:  # and step > start:
-                    self.tb_logger.scalar_summary('Loss', loss, step)
-
-                    # detailed losses
+                    # Запись в TensorBoard
+                    self.tb_logger.scalar_summary('Loss', loss.item(), current_step)
                     for loss_key in self.loss_dict.keys():
                         if self.loss_dict[loss_key] is not None:
-                            self.tb_logger.scalar_summary('Loss_' + loss_key.upper(),
-                                                          self.loss_dict[loss_key], step)
-
-                    self.tb_logger.scalar_summary('LearnRate', cur_G_lr, step)
+                            self.tb_logger.scalar_summary(f'Loss_{loss_key.upper()}', self.loss_dict[loss_key].item(), current_step)
+                    self.tb_logger.scalar_summary('LearnRate', cur_G_lr, current_step)
 
                     if self.train_config.clip_grad:
-                        self.tb_logger.scalar_summary('Moving_Max_Grad', moving_max_grad, step)
-                        self.tb_logger.scalar_summary('Max_Grad', max_grad, step)
+                        self.tb_logger.scalar_summary('Moving_Max_Grad', moving_max_grad, current_step)
+                        self.tb_logger.scalar_summary('Max_Grad', max_grad, current_step)
 
-            if (step % self.log_config.checkpoint_step == 0 or step == self.train_config.total_step) \
-                    and CONFIG.local_rank == 0 and (step > start):
-                self.logger.info('Saving the trained models from step {}...'.format(iter))
-                self.save_model("model_step_{}".format(step), step, loss)
-            
-            torch.cuda.empty_cache()
+                # Сохранение модели
+                if (current_step % self.log_config.checkpoint_step == 0 or current_step == self.train_config.total_step) \
+                        and (current_step > start):
+                    self.logger.info(f'Saving the trained models from step {current_step}...')
+                    self.save_model(f"model_step_{current_step}", current_step, loss.item())
+                    
+                if current_step % 50 == 0:
+                    if loss.item() < self.best_loss:
+                        self.best_loss = loss.item()
+                        self.save_model("best_loss", current_step, self.best_loss)
+                        self.logger.info(f"New best loss achieved at step {current_step}: {self.best_loss:.4f}. Model saved as 'best_loss.pth'.")
+                        
+                # if not (current_step < self.train_config.warmup_step and self.train_config.resume_checkpoint is None):
+                #     self.G_scheduler.step(loss.item())
+
+                # Очистка кэша
+                torch.cuda.empty_cache()
 
 
     def save_model(self, checkpoint_name, iter, loss):
         torch.save({
             'iter': iter,
             'loss': loss,
-            'state_dict': self.G.module.m2m.state_dict(),
+            'state_dict': self.G.m2m.state_dict(),
             'opt_state_dict': self.G_optimizer.state_dict(),
             'lr_state_dict': self.G_scheduler.state_dict()
         }, os.path.join(self.log_config.checkpoint_path, '{}.pth'.format(checkpoint_name)))

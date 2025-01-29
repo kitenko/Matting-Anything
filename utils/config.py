@@ -81,12 +81,12 @@ CONFIG.benchmark.him2k_comp_img = '/path/to/data/HIM2K/images/comp'
 CONFIG.benchmark.him2k_comp_alpha = '/path/to/data/HIM2K/alphas/comp'
 CONFIG.benchmark.rwp636_img = '/path/to/data/RealWorldPortrait-636/image'
 CONFIG.benchmark.rwp636_alpha = '/path/to/data/RealWorldPortrait-636/alpha'
-CONFIG.benchmark.ppm100_img = '/path/to/data/PPM-100/image'
-CONFIG.benchmark.ppm100_alpha = '/path/to/data/PPM-100/matte'
+CONFIG.benchmark.ppm100_img = '/app/datasets/PPM-100/PPM-100/image'
+CONFIG.benchmark.ppm100_alpha = '/app/datasets/PPM-100/PPM-100/matte'
 CONFIG.benchmark.pm10k_img = '/path/to/data/P3M-10k/validation/P3M-500-NP/original_image'
 CONFIG.benchmark.pm10k_alpha = '/path/to/data/P3M-10k/validation/P3M-500-NP/mask'
-CONFIG.benchmark.am2k_img = '/path/to/data/AM2k/validation/original'
-CONFIG.benchmark.am2k_alpha = '/path/to/data/AM2k/validation/mask'
+CONFIG.benchmark.am2k_img = '/app/datasets/AM-2k-20250125T084638Z-001/AM-2k/validation/original'
+CONFIG.benchmark.am2k_alpha = '/app/datasets/AM-2k-20250125T084638Z-001/AM-2k/validation/mask'
 CONFIG.benchmark.rw100_img = '/path/to/data/RefMatte_RW_100/image_all'
 CONFIG.benchmark.rw100_alpha = '/path/to/data/RefMatte_RW_100/mask'
 CONFIG.benchmark.rw100_text = '/path/to/data/RefMatte_RW_100/refmatte_rw100_label.json'
@@ -112,6 +112,8 @@ CONFIG.train.clip_grad = True
 CONFIG.train.resume_checkpoint = None
 # reset the learning rate (this option will reset the optimizer and learning rate scheduler and ignore warmup)
 CONFIG.train.reset_lr = False
+
+CONFIG.train.lr_plateau_patience = 500
 
 
 # Logging config

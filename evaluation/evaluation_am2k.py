@@ -2,10 +2,18 @@ import os
 import cv2
 import sys
 import numpy as np
-sys.path.insert(0, './utils')
-from evaluate import compute_sad_loss, compute_mse_loss, compute_mad_loss, compute_gradient_loss, compute_connectivity_error
 import argparse
 from tqdm import tqdm
+
+sys.path.insert(0, './utils')
+from evaluate import compute_sad_loss, compute_mse_loss, compute_mad_loss, compute_gradient_loss, compute_connectivity_error
+
+# Список поддерживаемых форматов изображений
+VALID_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif']
+
+def is_image(file_name):
+    """Проверка, является ли файл изображением на основе расширения."""
+    return any(file_name.lower().endswith(ext) for ext in VALID_IMAGE_EXTENSIONS)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -20,19 +28,23 @@ if __name__ == '__main__':
     mad_loss = []
     grad_loss = []
     conn_loss = []
-    ### loss_unknown only consider the unknown regions, i.e. trimap==128, as trimap-based methods do
     mse_loss_unknown = []
     sad_loss_unknown = []
-    
+
     for img in tqdm(os.listdir(args.label_dir)):
+        if not is_image(img):
+            continue  # Пропускаем файл, если это не изображение
+
         print(img)
-        #pred = cv2.imread(os.path.join(args.pred_dir, img.replace('.png', '.jpg')), 0).astype(np.float32)
+
+        # Загрузка изображений
         pred = cv2.imread(os.path.join(args.pred_dir, img), 0).astype(np.float32)
         label = cv2.imread(os.path.join(args.label_dir, img), 0).astype(np.float32)
         detailmap = cv2.imread(os.path.join(args.detailmap_dir, img), 0).astype(np.float32)
 
         detailmap[detailmap > 0] = 128
 
+        # Расчёт потерь для всего изображения и для регионов с trimap==128
         mse_loss_unknown_ = compute_mse_loss(pred, label, detailmap)
         sad_loss_unknown_ = compute_sad_loss(pred, label, detailmap)[0]
 
@@ -44,12 +56,12 @@ if __name__ == '__main__':
         grad_loss_ = compute_gradient_loss(pred, label, detailmap)
         conn_loss_ = compute_connectivity_error(pred, label, detailmap)
 
-        print('Whole Image: MSE:', mse_loss_, ' SAD:', sad_loss_, ' MAD:', mad_loss_, 'Grad:', grad_loss_, ' Conn:', conn_loss_)
+        print('Whole Image: MSE:', mse_loss_, ' SAD:', sad_loss_, ' MAD:', mad_loss_, ' Grad:', grad_loss_, ' Conn:', conn_loss_)
         print('Detail Region: MSE:', mse_loss_unknown_, ' SAD:', sad_loss_unknown_)
 
+        # Сохранение результатов
         mse_loss_unknown.append(mse_loss_unknown_)
         sad_loss_unknown.append(sad_loss_unknown_)
-
         mse_loss.append(mse_loss_)
         sad_loss.append(sad_loss_)
         mad_loss.append(mad_loss_)

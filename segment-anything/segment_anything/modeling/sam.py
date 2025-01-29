@@ -402,3 +402,4 @@ class Sam(nn.Module):
               
 
         return image_embeddings, torch.stack(masks, dim=0), torch.stack(post_masks, dim=0)
+      

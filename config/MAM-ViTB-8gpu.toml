@@ -1,13 +1,12 @@
 # Refer to utils/config.py for definition and options.
 
-version = "mam_vitb_8gpu"
-dist = true
+version = "cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True"
 wandb = false
 
 [model]
 trimap_channel = 3
 mask_channel = 1
-batch_size = 10
+batch_size = 4
 freeze_seg = true
 self_refine_width1 = 30
 self_refine_width2 = 15
@@ -16,38 +15,39 @@ self_refine_width2 = 15
     m2m = "sam_decoder_deep"
 
 [train]
-total_step = 20000
-warmup_step = 4000
+total_step = 30000
+warmup_step = 500
 val_step = 0
 clip_grad = true
-G_lr = 1e-3
+G_lr = 1e-4
 rec_weight = 1.0
 lap_weight = 1.0
 # Uncomment to resume training
-#resume_checkpoint = "path/to/checkpoint"
-#reset_lr = false
+resume_checkpoint = "/app/checkpoints/weights_researcher/mam_vitb"
+reset_lr = true
+lr_plateau_patience = 350
 
 
 [data]
-d646_fg = "path/to/Distinctions-646/Train_ori/FG"
-d646_pha = "path/to/Distinctions-646/Train_ori/GT"
-aim_fg = "path/to/AIM/Combined_Dataset/fg"
-aim_pha = "path/to/AIM/Combined_Dataset/alpha"
-human2k_fg = "path/to/Human2K/Train/FG"
-human2k_pha = "path/to/Human2K/Train/Alpha"
-am2k_fg = "path/to/AM2k/train/fg"
-am2k_pha = "path/to/AM2k/train/mask"
-rim_img = "path/to/RefMatte/train/img_full"
-rim_pha = "path/to/RefMatte/train/mask"
-coco_bg = "path/to/COCO/train2017"
-bg20k_bg = "path/to/Matting/BG20k/full"
-workers = 4
+d646_fg = "datasets/Distinctions-646/Distinctions-646/Train/FG"
+d646_pha = "datasets/Distinctions-646/Distinctions-646/Train/GT"
+aim_fg = "/app/datasets/AIM-500-20250125T084537Z-001/AIM-500/original"
+aim_pha = "/app/datasets/AIM-500-20250125T084537Z-001/AIM-500/mask"
+# human2k_fg = "path/to/Human2K/Train/FG"
+# human2k_pha = "path/to/Human2K/Train/Alpha"
+am2k_fg = "/app/datasets/AM-2k-20250125T084638Z-001/AM-2k/train/fg"
+am2k_pha = "/app/datasets/AM-2k-20250125T084638Z-001/AM-2k/train/mask"
+rim_img = "/app/datasets/RefMatte/train/img"
+rim_pha = "/app/datasets/RefMatte/train/prepare_mask"
+coco_bg = "/app/datasets/coco_data/train2017"
+bg20k_bg = "/app/datasets/BG-20k-20250125T085249Z-003/BG-20k/train"
+workers = 8
 crop_size = 1024
 cutmask_prob = 0.25
 pha_ratio = 0.5
 augmentation = true
 random_interp = true
-real_world_aug = false
+real_world_aug = true
 
 [log]
 tensorboard_path = "./logs/tensorboard"
@@ -57,4 +57,4 @@ logging_path = "./logs/stdout"
 logging_step =  10
 logging_level = "INFO"
 checkpoint_path = "./checkpoints/"
-checkpoint_step = 2000
+checkpoint_step = 500

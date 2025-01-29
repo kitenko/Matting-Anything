@@ -34,7 +34,7 @@ PALETTE_back = (51, 255, 146)
 
 GROUNDING_DINO_CONFIG_PATH = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 GROUNDING_DINO_CHECKPOINT_PATH = "checkpoints/groundingdino_swint_ogc.pth"
-mam_checkpoint="checkpoints/mam_vitb.pth"
+mam_checkpoint="/app/checkpoints/weights_researcher/mam_vitb.pth"
 output_dir="outputs"
 device="cuda"
 background_list = os.listdir('assets/backgrounds')
@@ -237,7 +237,7 @@ if __name__ == "__main__":
 
         with gr.Row():
             with gr.Column():
-                input_image = gr.Image(source='upload', type="numpy", value="assets/demo.jpg", tool="sketch")
+                input_image = gr.Image(type="numpy", value="assets/demo.jpg")
                 task_type = gr.Dropdown(["scribble_point", "scribble_box", "text"], value="text", label="Prompt type")
                 text_prompt = gr.Textbox(label="Text prompt", placeholder="the girl in the middle")
                 background_type = gr.Dropdown(["generated_by_text", "real_world_sample"], value="generated_by_text", label="Background type")
