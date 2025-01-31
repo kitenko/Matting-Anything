@@ -36,15 +36,17 @@ class sam2_m2m(nn.Module):
     def forward_inference(self, image_dict):
         image = image_dict["image"]
         bbox = image_dict.get("bbox")
-        point = image_dict.get("point")
         
         input_size=image_dict["pad_shape"]
         original_size=image_dict["ori_shape"]
         
+        pts_torch = image_dict.get('point')
+        labels_torch = image_dict.get('point_labels_batch')
+        
         
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
             self.predictor.set_image_batch(image)
-            all_masks, _, all_low_res_masks_tensor = self.predictor.predict_batch(box_batch=bbox, point_coords_batch=point)
+            all_masks, _, all_low_res_masks_tensor = self.predictor.predict_batch(box_batch=bbox, point_coords_batch=pts_torch, point_labels_batch=labels_torch)
             feas = self.predictor._features["image_embed"]
             masks = all_masks[..., : input_size[0], : input_size[1]]
             masks = F.interpolate(masks, original_size, mode="bilinear", align_corners=False)

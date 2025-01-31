@@ -13,7 +13,6 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 import torchvision
-import networks
 import utils
 
 # Grounding DINO
@@ -25,18 +24,17 @@ from groundingdino.util.inference import Model
 sys.path.insert(0, './segment-anything')
 from segment_anything.utils.transforms import ResizeLongestSide
 
-# SD
-from diffusers import StableDiffusionPipeline
+# SD импортирован инициализация StableDiffusionPipeline удалены
 
 from networks.generator_m2m_sam_2 import sam2_get_generator_m2m
 
 transform = ResizeLongestSide(1024)
 # Green Screen
-PALETTE_back = (51, 255, 146)
+PALETTE_back = (0, 0, 0)
 
 GROUNDING_DINO_CONFIG_PATH = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 GROUNDING_DINO_CHECKPOINT_PATH = "checkpoints/groundingdino_swint_ogc.pth"
-mam_checkpoint="/app/checkpoints/weights_researcher/mam_vitb.pth"
+mam_checkpoint="/app/checkpoints/0.5_for_os8_weigths_return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_8500.pth"
 output_dir="outputs"
 device="cuda"
 background_list = os.listdir('assets/backgrounds')
@@ -57,16 +55,15 @@ grounding_dino_model = Model(
     device=device
 )
 
-# initialize StableDiffusionPipeline
-generator = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16)
-generator.to(device)
+# Инициализация StableDiffusionPipeline удалена
+# generator = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16)
+# generator.to(device)
 
 
 def run_grounded_sam(
     input_image,
     text_prompt,
     task_type,
-    background_prompt,
     background_type,
     box_threshold,
     text_threshold,
@@ -85,7 +82,6 @@ def run_grounded_sam(
     os.makedirs(output_dir, exist_ok=True)
 
     # Из объекта input_image извлекаем numpy-массив картинки и маски
-    # Gradio вернёт словарь с ключами "image" и "mask", если tool='sketch'
     image_ori = input_image["image"]
     scribble = input_image["mask"]
     original_size = image_ori.shape[:2]
@@ -142,7 +138,7 @@ def run_grounded_sam(
         centers = np.array(centers)
         centers = transform.apply_coords(centers, original_size)
         point_coords = torch.from_numpy(centers).to(device).unsqueeze(0)
-        point_labels = torch.from_numpy(np.array([1] * len(centers))).unsqueeze(0).to(device)
+        point_labels = torch.from_numpy(np.array([1] * len(centers))).unsqueeze(0)
 
         if scribble_mode == 'split':
             # "split" означает, что каждая точка обрабатывается отдельно
@@ -152,7 +148,7 @@ def run_grounded_sam(
         sample = {
             'image': image.unsqueeze(0),
             'point': point_coords,
-            'label': point_labels,
+            'point_labels_batch': point_labels,  # Используем правильное имя ключа
             'ori_shape': original_size,
             'pad_shape': pad_size
         }
@@ -188,6 +184,9 @@ def run_grounded_sam(
     else:
         print(f"task_type:{task_type} error!")
         return []
+
+    # Добавьте вывод для отладки
+    print("Sample:", sample)
 
     # Запускаем MAM-модель, чтобы получить альфа-канал
     with torch.no_grad():
@@ -249,16 +248,8 @@ def run_grounded_sam(
         com_img = alpha_pred[..., None] * image_ori + (1 - alpha_pred[..., None]) * np.uint8(background_img)
         com_img = np.uint8(com_img)
     else:
-        if not background_prompt:
-            print('Please input non-empty background prompt')
-            background_img = np.zeros_like(image_ori)  # Заглушка
-        else:
-            # Генерация фона с помощью Stable Diffusion
-            background_img = generator(background_prompt).images[0]
-            background_img = np.array(background_img)
-            background_img = cv2.resize(background_img, (image_ori.shape[1], image_ori.shape[0]))
-        com_img = alpha_pred[..., None] * image_ori + (1 - alpha_pred[..., None]) * np.uint8(background_img)
-        com_img = np.uint8(com_img)
+        print('Unsupported background type selected!')
+        com_img = image_ori  # Или можно выбрать другой дефолтный фон
 
     # Генерация "зеленого экрана"
     green_img = alpha_pred[..., None] * image_ori + (1 - alpha_pred[..., None]) * np.array([PALETTE_back], dtype='uint8')
@@ -303,7 +294,6 @@ if __name__ == "__main__":
         
         Background types:
         **real_world_sample**: Random real-world image from `assets/backgrounds`.
-        **generated_by_text**: Generate background image via stable diffusion (`Background prompt` box).
         </details>
         """)
 
@@ -328,14 +318,15 @@ if __name__ == "__main__":
                     placeholder="e.g. 'the girl in the middle'"
                 )
                 background_type = gr.Dropdown(
-                    ["generated_by_text", "real_world_sample"],
-                    value="generated_by_text",
+                    ["real_world_sample"],
+                    value="real_world_sample",
                     label="Background type"
                 )
-                background_prompt = gr.Textbox(
-                    label="Background prompt",
-                    placeholder="e.g. 'downtown area in New York'"
-                )
+                # Удалён textbox для background_prompt, так как он больше не используется
+                # background_prompt = gr.Textbox(
+                #     label="Background prompt",
+                #     placeholder="e.g. 'downtown area in New York'"
+                # )
 
                 run_button = gr.Button(label="Run")
 
@@ -387,7 +378,6 @@ if __name__ == "__main__":
                 input_image,
                 text_prompt,
                 task_type,
-                background_prompt,
                 background_type,
                 box_threshold,
                 text_threshold,

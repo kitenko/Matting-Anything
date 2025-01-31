@@ -169,10 +169,10 @@ class Trainer(object):
         # Определяем количество шагов (итераций) в одной эпохе
         steps_per_epoch = len(self.train_dataloader)
         
-        if self.train_config.resume_checkpoint:
-            start = self.resume_step + 1
-        else:
-            start = 0
+        # if self.train_config.resume_checkpoint:
+        #     start = self.resume_step + 1
+        # else:
+        start = 0
         
         moving_max_grad = 0
         moving_grad_moment = 0.999
@@ -219,8 +219,8 @@ class Trainer(object):
                 mask = pred['mask']
                 
                 weight_os8 = utils.get_unknown_tensor(mask)
-                weight_os8[...] = 1
-
+                weight_os8[...] = 0.3
+ 
                 if current_step < self.train_config.warmup_step:
                     weight_os4 = utils.get_unknown_tensor(mask)
                     weight_os1 = utils.get_unknown_tensor(mask)

@@ -1,6 +1,7 @@
 # Refer to utils/config.py for definition and options.
 
-version = "cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True"
+version = "0.5_for_os8_weigths_return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True"
+# test = "test"
 wandb = false
 
 [model]
@@ -19,11 +20,11 @@ total_step = 30000
 warmup_step = 500
 val_step = 0
 clip_grad = true
-G_lr = 1e-4
+G_lr = 7e-5
 rec_weight = 1.0
 lap_weight = 1.0
 # Uncomment to resume training
-resume_checkpoint = "/app/checkpoints/weights_researcher/mam_vitb"
+resume_checkpoint = "/app/checkpoints/return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_20000"
 reset_lr = true
 lr_plateau_patience = 350
 

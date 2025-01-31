@@ -24,7 +24,7 @@
             "program": "${workspaceFolder}/inference_benchmark.py",
             "console": "integratedTerminal",
             "args": [
-                "--checkpoint", "/app/checkpoints/grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_5000.pth",
+                "--checkpoint", "/app/checkpoints/0.5_for_os8_weigths_return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_8500.pth",
                 "--config", "/app/config/MAM-ViTB-8gpu.toml",
                 "--benchmark", "am2k",
                 "--output", "outputs/sam_2_am2k",
@@ -59,7 +59,17 @@
                 "--detailmap-dir", "/app/datasets/PPM-100/PPM-100/matte"
             ],
             "justMyCode": false,
-        }
+        },
+
+        {
+            "name": "gradio",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/learn_gradio/forth.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}"
+        },
 
     ]
 }
