@@ -212,22 +212,27 @@ def video_predict(video_path: str, all_clicks: dict, all_boxes: dict) -> dict:
 def format_annotations_for_predictor(all_clicks: dict, all_boxes: dict) -> dict:
     formatted = {}
     for frame, clicks in all_clicks.items():
-        points_list = []
-        labels_list = []
-        for click in clicks:
-            pt, lbl = click
-            points_list.append(pt)
-            labels_list.append(lbl)
-        if points_list:
-            points_arr = np.array(points_list, dtype=np.float32)
-            labels_arr = np.array(labels_list, dtype=np.int32)
-        else:
-            points_arr = np.empty((0, 2), dtype=np.float32)
-            labels_arr = np.empty((0,), dtype=np.int32)
+        # Получаем боксы для данного кадра (если их нет — пустой список)
+        boxes = all_boxes.get(frame, [])
+        if not clicks and not boxes:
+            continue
+
+        # Если есть клики, сразу формируем массивы точек и меток, иначе оставляем None
+        points_arr = (
+            np.array([pt for pt, _ in clicks], dtype=np.float32)
+            if clicks else None
+        )
+        labels_arr = (
+            np.array([lbl for _, lbl in clicks], dtype=np.int32)
+            if clicks else None
+        )
+
+        # Если есть боксы, берем первый и преобразуем его в одномерный массив
         box = None
-        if frame in all_boxes and all_boxes[frame]:
-            first_box = all_boxes[frame][0]
-            box = np.array([first_box[0][0], first_box[0][1], first_box[1][0], first_box[1][1]], dtype=np.float32)
+        if boxes:
+            (x0, y0), (x1, y1) = boxes[0]
+            box = np.array([x0, y0, x1, y1], dtype=np.float32)
+
         formatted[frame] = (points_arr, labels_arr, box)
     return formatted
 
@@ -356,7 +361,7 @@ def main() -> None:
                     guidance_mode_video = gr.Radio(["alpha", "mask"], value="alpha", label="Guidance Mode")
                     background_type_video = gr.Radio(["real_world_sample", "original"], value="real_world_sample", label="Background Type")
                 predict_button_video = gr.Button("Предсказать")
-                video_predict_button = gr.Button("Предсказать видео")
+                # video_predict_button = gr.Button("Предсказать видео")
                 visualize_predictions_button = gr.Button("Визуализировать предсказания")
                 video_output = gr.Video(label="Видео с предсказаниями")
                 with gr.Row():
@@ -391,11 +396,11 @@ def main() -> None:
                     outputs=[com_img_video, green_img_video, alpha_rgb_video]
                 )
                 tool_selector_video.change(update_ui, inputs=[tool_selector_video], outputs=[radio_video, undo_button_video, undo_bbox_button_video])
-                video_predict_button.click(
-                    call_video_predict,
-                    inputs=[video_info, video_annotations],
-                    outputs=[]
-                )
+                # video_predict_button.click(
+                #     call_video_predict,
+                #     inputs=[video_info, video_annotations],
+                #     outputs=[]
+                # )
                 visualize_predictions_button.click(
                     predict_and_visualize_video,
                     inputs=[video_info, video_annotations],
