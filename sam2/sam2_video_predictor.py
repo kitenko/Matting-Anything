@@ -37,6 +37,12 @@ class SAM2VideoPredictor(SAM2Base):
         self.non_overlap_masks = non_overlap_masks
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
+        
+        self._bb_feat_sizes = [
+            (256, 256),
+            (128, 128),
+            (64, 64),
+        ]
 
     @torch.inference_mode()
     def init_state(
@@ -94,6 +100,13 @@ class SAM2VideoPredictor(SAM2Base):
         # (we directly use their consolidated outputs during tracking)
         # metadata for each tracking frame (e.g. which direction it's tracked)
         inference_state["frames_tracked_per_obj"] = {}
+        
+        inference_state["image_embed"] = {}
+        
+        inference_state["full_masks"] = {}
+        
+        inference_state["low_masks"] = {}
+        
         # Warm up the visual backbone and cache the image feature on frame 0
         self._get_image_feature(inference_state, frame_idx=0, batch_size=1)
         return inference_state
@@ -685,6 +698,10 @@ class SAM2VideoPredictor(SAM2Base):
         inference_state["output_dict_per_obj"].clear()
         inference_state["temp_output_dict_per_obj"].clear()
         inference_state["frames_tracked_per_obj"].clear()
+        
+        inference_state["image_embed"].clear()
+        inference_state["full_masks"].clear()
+        inference_state["low_masks"].clear()
 
     def _reset_tracking_results(self, inference_state):
         """Reset all tracking inputs and results across the videos."""
@@ -731,6 +748,14 @@ class SAM2VideoPredictor(SAM2Base):
             expanded_backbone_out["vision_pos_enc"][i] = pos
 
         features = self._prepare_backbone_features(expanded_backbone_out)
+        
+        feats = [
+            feat.permute(1, 2, 0).view(1, -1, *feat_size)
+            for feat, feat_size in zip(features[1][::-1], self._bb_feat_sizes[::-1])
+        ][::-1]
+        
+        inference_state["image_embed"][frame_idx] = feats[-1].clone()
+        
         features = (expanded_image,) + features
         return features
 
@@ -773,6 +798,10 @@ class SAM2VideoPredictor(SAM2Base):
             run_mem_encoder=run_mem_encoder,
             prev_sam_mask_logits=prev_sam_mask_logits,
         )
+        
+        inference_state["full_masks"][frame_idx] = current_out["pred_masks_high_res"].clone()
+        
+        inference_state["low_masks"][frame_idx] = current_out["pred_masks"].clone()
 
         # optionally offload the output to CPU memory to save GPU space
         storage_device = inference_state["storage_device"]

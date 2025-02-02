@@ -9,6 +9,7 @@ from torch.nn import functional as F
 import utils
 from networks.generator_m2m_sam_2 import sam2_get_generator_m2m
 from segment_anything.utils.transforms import ResizeLongestSide
+from sam2.torch_sam_image_predictor import SAM2TorchPredictor
 
 #########################################################
 # Настройки (при необходимости можно вынести в конфиг)
@@ -48,7 +49,7 @@ class MAMInferencer:
         """
         self.device = device
         # Инициализация MAM
-        self.mam_model = sam2_get_generator_m2m(seg='sam_vit_b', m2m='sam_decoder_deep')
+        self.mam_model: SAM2TorchPredictor = sam2_get_generator_m2m(seg='sam_vit_b', m2m='sam_decoder_deep')
         self.mam_model.to(self.device)
 
         # Загрузка чекпоинта
@@ -98,6 +99,25 @@ class MAMInferencer:
 
         # Возвращаем батч [1, 3, H, W]
         return image_tensor.unsqueeze(0), original_size, (h, w)
+    
+    
+    def _prepare_video_frame(self, image_np: np.ndarray):
+        # Оригинальный размер
+        original_size = image_np.shape[:2]
+
+
+        image_tensor = torch.from_numpy(image_np).to(self.device)
+        image_tensor = image_tensor.permute(2, 0, 1).float()
+
+        # Нормализация
+        pixel_mean = torch.tensor([123.675, 116.28, 103.53], device=self.device).view(3,1,1)
+        pixel_std = torch.tensor([58.395, 57.12, 57.375], device=self.device).view(3,1,1)
+        image_tensor = ((image_tensor - pixel_mean) / pixel_std).unsqueeze(0)
+        
+        image_tensor = F.interpolate(image_tensor, (1024, 1024), mode="bilinear")
+
+        # Возвращаем батч [1, 3, H, W]
+        return image_tensor, original_size
 
     def _prepare_points(self, points, original_size):
         """
@@ -264,3 +284,107 @@ class MAMInferencer:
         green_img = np.uint8(green_img)
 
         return com_img, green_img, alpha_rgb
+    
+    
+    def predict_video(self, 
+                      image_embed: dict, 
+                      full_masks: dict, 
+                      low_masks: dict, 
+                      original_image_np: np.ndarray, 
+                      guidance_mode: str = "alpha",
+                      background_type: str = "real_world_sample"
+                      ):
+        
+        height_origin, width_origin = original_image_np.shape[1], original_image_np.shape[2]
+        
+        torch_frames = {}
+        
+        for id_frame, np_image in enumerate(original_image_np):
+            image_tensor, original_size = self._prepare_video_frame(np_image)
+            
+            torch_frames[id_frame] = {
+                    'image': image_tensor,
+                    'ori_shape': original_size,
+                }
+
+        
+        result_masks = {}
+        
+        bg_file = os.path.join(BACKGROUND_FOLDER, random.choice(background_list))
+        
+        with torch.no_grad():
+            frames_predict: dict = self.mam_model.forward_video(image_embed, full_masks, low_masks, width_origin, height_origin, torch_frames)
+            
+            for id_frame, (img_emb, pred, post_mask) in frames_predict.items():
+
+                alpha_pred_os1 = pred['alpha_os1']
+                alpha_pred_os4 = pred['alpha_os4']
+                alpha_pred_os8 = pred['alpha_os8']
+
+                # # Обрезаем паддинг
+                # h_pad, w_pad = pad_size
+                # alpha_pred_os8 = alpha_pred_os8[..., :h_pad, :w_pad]
+                # alpha_pred_os4 = alpha_pred_os4[..., :h_pad, :w_pad]
+                # alpha_pred_os1 = alpha_pred_os1[..., :h_pad, :w_pad]
+
+                # Маштабируем к original_size
+                alpha_pred_os8 = F.interpolate(
+                    alpha_pred_os8, torch_frames[id_frame]['ori_shape'], mode="bilinear", align_corners=False
+                )
+                alpha_pred_os4 = F.interpolate(
+                    alpha_pred_os4, torch_frames[id_frame]['ori_shape'], mode="bilinear", align_corners=False
+                )
+                alpha_pred_os1 = F.interpolate(
+                    alpha_pred_os1, torch_frames[id_frame]['ori_shape'], mode="bilinear", align_corners=False
+                )
+
+                # Guidance
+                if guidance_mode == 'mask':
+                    # Основано на post_mask
+                    weight_os8 = utils.get_unknown_tensor_from_mask_oneside(
+                        post_mask, rand_width=10, train_mode=False
+                    )
+                    post_mask[weight_os8 > 0] = alpha_pred_os8[weight_os8 > 0]
+                    alpha_pred = post_mask.clone().detach()
+                else:
+                    # alpha
+                    weight_os8 = utils.get_unknown_box_from_mask(post_mask)
+                    alpha_pred_os8[weight_os8 > 0] = post_mask[weight_os8 > 0]
+                    alpha_pred = alpha_pred_os8.clone().detach()
+
+                weight_os4 = utils.get_unknown_tensor_from_pred_oneside(
+                    alpha_pred, rand_width=20, train_mode=False
+                )
+                alpha_pred[weight_os4 > 0] = alpha_pred_os4[weight_os4 > 0]
+
+                weight_os1 = utils.get_unknown_tensor_from_pred_oneside(
+                    alpha_pred, rand_width=10, train_mode=False
+                )
+                alpha_pred[weight_os1 > 0] = alpha_pred_os1[weight_os1 > 0]
+
+                alpha_pred = alpha_pred[0][0].cpu().numpy()  # (H, W) float [0..1]
+
+                # 5) Сборка результата
+                alpha_rgb = cv2.cvtColor(np.uint8(alpha_pred * 255), cv2.COLOR_GRAY2RGB)
+
+                # Подстановка фона (real_world_sample) при наличии
+                if background_type == 'real_world_sample' and background_list:
+                    background_img = cv2.imread(bg_file)  # BGR
+                    if background_img is not None:
+                        background_img = cv2.cvtColor(background_img, cv2.COLOR_BGR2RGB)
+                        background_img = cv2.resize(background_img, (original_image_np[id_frame].shape[1], original_image_np[id_frame].shape[0]))
+                        com_img = alpha_pred[..., None] * original_image_np[id_frame] + (1 - alpha_pred[..., None]) * np.uint8(background_img)
+                        com_img = np.uint8(com_img)
+                    else:
+                        com_img = original_image_np[id_frame].copy()
+                else:
+                    # Если нет фонов или иные параметры, оставим исходное
+                    com_img = original_image_np[id_frame].copy()
+
+                # "Зелёный" (или чёрный) экран
+                green_img = alpha_pred[..., None] * original_image_np[id_frame] + (1 - alpha_pred[..., None]) * np.array([PALETTE_back], dtype='uint8')
+                green_img = np.uint8(green_img)
+                
+                result_masks[id_frame] = (com_img, green_img, alpha_rgb)
+
+        return result_masks

@@ -100,3 +100,83 @@ class ResizeLongestSide:
         neww = int(neww + 0.5)
         newh = int(newh + 0.5)
         return (newh, neww)
+    
+    
+    
+class ResizeMaskWithAspect:
+    """
+    Класс для исправления масштабирования маски.
+    
+    Предполагается, что на вход подаётся маска размера 256×256 (или другого квадратного размера),
+    которая была получена после ресайза с некорректным соотношением сторон.
+    Метод apply_mask возвращает маску, изменённую таким образом, чтобы её размер соответствовал
+    исходным пропорциям изображения (передаются height_origin и width_origin),
+    при этом максимальная сторона будет равна target_size (например, 256).
+    """
+
+    def __init__(self, target_size: int = 256) -> None:
+        """
+        Аргументы:
+            target_size (int): максимальный размер (длина) наибольшей стороны после ресайза.
+        """
+        self.target_size = target_size
+
+    @staticmethod
+    def get_new_size(height_origin: int, width_origin: int, target_size: int) -> Tuple[int, int]:
+        """
+        Вычисляет новый размер (new_h, new_w) для изображения с исходным размером (height_origin, width_origin),
+        чтобы максимальная сторона стала равна target_size и сохранилось исходное соотношение сторон.
+        
+        Аргументы:
+            height_origin (int): исходная высота изображения.
+            width_origin (int): исходная ширина изображения.
+            target_size (int): требуемая длина наибольшей стороны.
+            
+        Возвращает:
+            Tuple[int, int]: новый размер (new_h, new_w).
+        """
+        scale = target_size / max(height_origin, width_origin)
+        new_h = int(round(height_origin * scale))
+        new_w = int(round(width_origin * scale))
+        return new_h, new_w
+
+    def apply_mask(
+        self,
+        mask: torch.Tensor,
+        height_origin: int,
+        width_origin: int,
+        mode: str = "nearest",
+        **kwargs,
+    ) -> torch.Tensor:
+        """
+        Ресайзит маску с квадратного размера (например, 256×256) к новому размеру,
+        вычисленному на основе исходных размеров изображения (height_origin, width_origin)
+        с сохранением пропорций. При этом максимальная сторона будет равна self.target_size.
+        
+        Аргументы:
+            mask (torch.Tensor): Маска, ожидается тензор размера (B, C, H, W) или (C, H, W).
+                                   Обычно H=W=256.
+            height_origin (int): Исходная высота изображения.
+            width_origin (int): Исходная ширина изображения.
+            mode (str): Режим интерполяции. Для масок рекомендуется "nearest".
+            **kwargs: Дополнительные аргументы для F.interpolate.
+        
+        Возвращает:
+            torch.Tensor: Маска с новым размером, соответствующим исходному соотношению сторон.
+        """
+        # Вычисляем новый размер
+        new_h, new_w = self.get_new_size(height_origin, width_origin, self.target_size)
+
+        # Если маска имеет форму (C, H, W), добавляем батч-измерение
+        need_unsqueeze = False
+        if mask.dim() == 3:
+            mask = mask.unsqueeze(0)
+            need_unsqueeze = True
+
+        # Применяем интерполяцию
+        resized_mask = F.interpolate(mask, size=(new_h, new_w), mode=mode, **kwargs)
+
+        # Если исходно маска была без батч-измерения, убираем его обратно
+        if need_unsqueeze:
+            resized_mask = resized_mask.squeeze(0)
+        return resized_mask

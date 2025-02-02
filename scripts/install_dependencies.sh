@@ -40,8 +40,9 @@ pip install \
     timm==1.0.14 \
     hydra-core==1.3.2 \
     iopath==0.1.10 \
-    gradio==3.50.2 \
-    groundingdino-py==0.4.0 \
+    gradio==5.14.0 \
+    decord==0.6.0 \
+    # moviepy==2.1.2 \
 
 
 echo "Installing jsonargparse with signatures support..."

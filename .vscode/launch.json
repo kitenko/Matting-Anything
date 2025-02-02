@@ -65,7 +65,7 @@
             "name": "gradio",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/learn_gradio/forth.py",
+            "program": "${workspaceFolder}/learn_gradio/second.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "cwd": "${workspaceFolder}"

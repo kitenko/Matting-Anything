@@ -9,7 +9,7 @@ sys.path.append("/app")
 from learn_gradio.inference import MAMInferencer
 
 # Создаём экземпляр модели
-model = MAMInferencer("/app/checkpoints/return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_30000.pth") 
+model_image = MAMInferencer("/app/checkpoints/return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_30000.pth") 
 
 # Определяем типы данных
 Point = Tuple[int, int]  # Координаты точки (x, y)
@@ -108,7 +108,7 @@ def run_prediction(
     
     formatted_points = [((x, y), label) for ((x, y), label) in selected_points]
     
-    com_img, green_img, alpha_rgb = model.predict(
+    com_img, green_img, alpha_rgb = model_image.predict(
         image=original_image,
         points=formatted_points,
         bboxes=bounding_boxes,
