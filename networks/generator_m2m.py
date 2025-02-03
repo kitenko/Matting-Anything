@@ -7,8 +7,6 @@ import torch.nn.functional as F
 
 from   utils import CONFIG
 from   networks import m2ms, ops
-import sys
-sys.path.insert(0, './segment-anything')
 from segment_anything import sam_model_registry
 
 class sam_m2m(nn.Module):

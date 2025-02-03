@@ -754,7 +754,7 @@ class SAM2VideoPredictor(SAM2Base):
             for feat, feat_size in zip(features[1][::-1], self._bb_feat_sizes[::-1])
         ][::-1]
         
-        inference_state["image_embed"][frame_idx] = feats[-1].clone()
+        inference_state["image_embed"][frame_idx] = feats[-1].clone().cpu()
         
         features = (expanded_image,) + features
         return features
@@ -799,9 +799,9 @@ class SAM2VideoPredictor(SAM2Base):
             prev_sam_mask_logits=prev_sam_mask_logits,
         )
         
-        inference_state["full_masks"][frame_idx] = current_out["pred_masks_high_res"].clone()
+        inference_state["full_masks"][frame_idx] = current_out["pred_masks_high_res"].clone().cpu()
         
-        inference_state["low_masks"][frame_idx] = current_out["pred_masks"].clone()
+        inference_state["low_masks"][frame_idx] = current_out["pred_masks"].clone().cpu()
 
         # optionally offload the output to CPU memory to save GPU space
         storage_device = inference_state["storage_device"]
