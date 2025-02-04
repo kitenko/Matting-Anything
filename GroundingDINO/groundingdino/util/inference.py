@@ -7,11 +7,11 @@ import torch
 from PIL import Image
 from torchvision.ops import box_convert
 
-import groundingdino.datasets.transforms as T
-from groundingdino.models import build_model
-from groundingdino.util.misc import clean_state_dict
-from groundingdino.util.slconfig import SLConfig
-from groundingdino.util.utils import get_phrases_from_posmap
+import GroundingDINO.groundingdino.datasets.transforms as T
+from GroundingDINO.groundingdino.models import build_model
+from GroundingDINO.groundingdino.util.misc import clean_state_dict
+from GroundingDINO.groundingdino.util.slconfig import SLConfig
+from GroundingDINO.groundingdino.util.utils import get_phrases_from_posmap
 import pdb
 # ----------------------------------------------------------------------------------------------------------------------
 # OLD API

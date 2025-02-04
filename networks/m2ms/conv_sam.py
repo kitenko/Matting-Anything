@@ -63,7 +63,7 @@ class BasicBlock(nn.Module):
         return out
 
 class SAM_Decoder_Deep(nn.Module):
-    def __init__(self, nc, layers, block=BasicBlock, norm_layer=None, large_kernel=False, late_downsample=False):
+    def __init__(self, layers: list[int] = [2, 3, 3, 2], block=BasicBlock, norm_layer=None, large_kernel=False, late_downsample=False):
         super(SAM_Decoder_Deep, self).__init__()
         self.logger = logging.getLogger("Logger")
         if norm_layer is None:

@@ -4,16 +4,14 @@ import numbers
 import random
 import logging
 import numpy as np
-import imgaug.augmenters as iaa
+import albumentations as A
 
 import torch
-from   torch.utils.data import Dataset
-from   torch.nn import functional as F
-from   torchvision import transforms
+from torch.utils.data import Dataset
+from torch.nn import functional as F
+from torchvision import transforms
 
-from   utils import CONFIG
-
-from random import randint
+from utils import CONFIG
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -31,24 +29,23 @@ class ToTensor(object):
     """
     Convert ndarrays in sample to Tensors with normalization.
     """
-    def __init__(self, phase="test", real_world_aug = False):
+    def __init__(self, phase="test", real_world_aug=False):
         self.mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
         self.std = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
         self.phase = phase
         if real_world_aug:
-            self.RWA = iaa.SomeOf((1, None), [
-                iaa.LinearContrast((0.6, 1.4)),
-                iaa.JpegCompression(compression=(0, 60)),
-                iaa.GaussianBlur(sigma=(0.0, 3.0)),
-                iaa.AdditiveGaussianNoise(scale=(0, 0.1*255))
-            ], random_order=True)
+            self.RWA = A.Compose([
+                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.4, p=0.2),
+                A.GaussianBlur(blur_limit=(3, 7), p=0.2),
+                A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+                A.ImageCompression(quality_range=(60, 95), p=0.3)
+            ])
         else:
             self.RWA = None
-    
+
     def get_box_from_alpha(self, alpha_final):
         bi_mask = np.zeros_like(alpha_final)
-        bi_mask[alpha_final>0.5] = 1
-        #bi_mask[alpha_final<=0.5] = 0
+        bi_mask[alpha_final > 0.5] = 1
         fg_set = np.where(bi_mask != 0)
         if len(fg_set[1]) == 0 or len(fg_set[0]) == 0:
             x_min = random.randint(1, 511)
@@ -61,43 +58,31 @@ class ToTensor(object):
             y_min = np.min(fg_set[0])
             y_max = np.max(fg_set[0])
         bbox = np.array([x_min, y_min, x_max, y_max])
-        #cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0,255,0), 2)
-        #cv2.imwrite('../outputs/test.jpg', image)
-        #cv2.imwrite('../outputs/test_gt.jpg', alpha_single)
         return bbox
 
     def __call__(self, sample):
-        # convert GBR images to RGB
+        # Конвертация изображения из GBR в RGB
         image, alpha, trimap = sample['image'][:,:,::-1], sample['alpha'], sample['trimap']
         
-        alpha[alpha < 0 ] = 0
-        alpha[alpha > 1] = 1
-        
+        alpha = np.clip(alpha, 0, 1)
+
         bbox = self.get_box_from_alpha(alpha)
 
         if self.phase == 'train' and self.RWA is not None and np.random.rand() < 0.5:
-            image[image > 255] = 255
-            image[image < 0] = 0
-            image = np.round(image).astype(np.uint8)
-            image = np.expand_dims(image, axis=0)
-            image = self.RWA(images=image)
-            image = image[0, ...]
+            image = np.clip(image, 0, 255).astype(np.uint8)
+            augmented = self.RWA(image=image)
+            image = augmented['image']
 
-        # swap color axis because
-        # numpy image: H x W x C
-        # torch image: C X H X W
+        # Меняем порядок осей, чтобы получить формат C x H x W
         image = image.transpose((2, 0, 1)).astype(np.float32)
         alpha = np.expand_dims(alpha.astype(np.float32), axis=0)
         trimap[trimap < 85] = 0
         trimap[trimap >= 170] = 2
         trimap[trimap >= 85] = 1
-        #image = cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255,0,0), 3)
-        #cv2.imwrite(os.path.join('outputs', 'img_bbox.png'), image.astype('uint8'))
-        # normalize image
+        # Нормализуем изображение
         image /= 255.
 
         if self.phase == "train":
-            # convert GBR images to RGB
             fg = sample['fg'][:,:,::-1].transpose((2, 0, 1)).astype(np.float32) / 255.
             sample['fg'] = torch.from_numpy(fg).sub_(self.mean).div_(self.std)
             bg = sample['bg'][:,:,::-1].transpose((2, 0, 1)).astype(np.float32) / 255.
@@ -194,7 +179,7 @@ class RandomAffine(object):
             shear = 0.0
 
         if flip is not None:
-            flip = (np.random.rand(2) < flip).astype(np.int) * 2 - 1
+            flip = (np.random.rand(2) < flip).astype(np.int32) * 2 - 1
 
         return angle, translations, scale, shear, flip
 
@@ -220,7 +205,7 @@ class RandomAffine(object):
         return sample
 
 
-    @ staticmethod
+    @staticmethod
     def _get_inverse_affine_matrix(center, angle, translate, scale, shear, flip):
         # Helper method to compute inverse matrix for affine transformation
 
@@ -260,6 +245,7 @@ class RandomAffine(object):
 
         return matrix
 
+
 class RandomJitter(object):
     """
     Random change the hue of the image
@@ -268,7 +254,7 @@ class RandomJitter(object):
     def __call__(self, sample):
         fg, alpha = sample['fg'], sample['alpha']
         # if alpha is all 0 skip
-        if np.all(alpha==0):
+        if np.all(alpha == 0):
             return sample
         # convert to HSV space, convert to float32 image to keep precision during space conversion.
         fg = cv2.cvtColor(fg.astype(np.float32)/255.0, cv2.COLOR_BGR2HSV)
@@ -280,14 +266,14 @@ class RandomJitter(object):
         sat_jitter = np.random.rand()*(1.1 - sat_bar)/5 - (1.1 - sat_bar) / 10
         sat = fg[:, :, 1]
         sat = np.abs(sat + sat_jitter)
-        sat[sat>1] = 2 - sat[sat>1]
+        sat[sat > 1] = 2 - sat[sat > 1]
         fg[:, :, 1] = sat
         # Value noise
         val_bar = fg[:, :, 2][alpha > 0].mean()
-        val_jitter = np.random.rand()*(1.1 - val_bar)/5-(1.1 - val_bar) / 10
+        val_jitter = np.random.rand()*(1.1 - val_bar)/5 - (1.1 - val_bar) / 10
         val = fg[:, :, 2]
         val = np.abs(val + val_jitter)
-        val[val>1] = 2 - val[val>1]
+        val[val > 1] = 2 - val[val > 1]
         fg[:, :, 2] = val
         # convert back to BGR space
         fg = cv2.cvtColor(fg, cv2.COLOR_HSV2BGR)
@@ -371,6 +357,7 @@ class RandomCrop(object):
         sample.update({'fg': fg_crop, 'alpha': alpha_crop, 'trimap': trimap_crop, 'bg': bg_crop})
         return sample
 
+
 class GenTrimap(object):
     def __init__(self):
         self.erosion_kernels = [None] + [cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)) for size in range(1,100)]
@@ -382,10 +369,12 @@ class GenTrimap(object):
         max_kernel_size = max(30, int((min(h,w) / 2048) * 30))
 
         ### generate trimap
-        fg_mask = (alpha + 1e-5).astype(np.int).astype(np.uint8)
-        bg_mask = (1 - alpha + 1e-5).astype(np.int).astype(np.uint8)
-        fg_mask = cv2.erode(fg_mask, self.erosion_kernels[np.random.randint(1, max_kernel_size)])
-        bg_mask = cv2.erode(bg_mask, self.erosion_kernels[np.random.randint(1, max_kernel_size)])
+        fg_mask = (alpha + 1e-5).astype(np.int32).astype(np.uint8)
+        bg_mask = (1 - alpha + 1e-5).astype(np.int32).astype(np.uint8)
+        # Ensure kernel size is within available range
+        kernel_size = np.random.randint(1, min(max_kernel_size, len(self.erosion_kernels)-1) + 1)
+        fg_mask = cv2.erode(fg_mask, self.erosion_kernels[kernel_size])
+        bg_mask = cv2.erode(bg_mask, self.erosion_kernels[kernel_size])
 
         trimap = np.ones_like(alpha) * 128
         trimap[fg_mask == 1] = 255
@@ -411,6 +400,7 @@ class Composite(object):
         sample['image'] = image
         return sample
 
+
 class Composite_Seg(object):
     def __call__(self, sample):
         fg, bg, alpha = sample['fg'], sample['bg'], sample['alpha']
@@ -420,47 +410,114 @@ class Composite_Seg(object):
         sample['image'] = image
         return sample
 
+
 class DataGenerator(Dataset):
     def __init__(self, phase="train"):
         self.phase = phase
         self.crop_size = CONFIG.data.crop_size
         self.pha_ratio = CONFIG.data.pha_ratio
-        self.coco_bg = [os.path.join(CONFIG.data.coco_bg, name) for name in sorted(os.listdir(CONFIG.data.coco_bg))] 
+
+        # Initialize lists of file paths
+        self.coco_bg = self._load_paths(CONFIG.data.coco_bg, "coco_bg")
         self.coco_num = len(self.coco_bg)
-        self.bg20k_bg = [os.path.join(CONFIG.data.bg20k_bg, name) for name in sorted(os.listdir(CONFIG.data.bg20k_bg))]         
+        self.bg20k_bg = self._load_paths(CONFIG.data.bg20k_bg, "bg20k_bg")
         self.bg20k_num = len(self.bg20k_bg)
+
+        self.d646_fg = self._load_paths(CONFIG.data.d646_fg, "d646_fg")
+        self.d646_pha = self._load_paths(CONFIG.data.d646_pha, "d646_pha")
+
+        self.aim_fg = self._load_paths(CONFIG.data.aim_fg, "aim_fg")
+        self.aim_pha = self._load_paths(CONFIG.data.aim_pha, "aim_pha")
+
+        self.am2k_fg = self._load_paths(CONFIG.data.am2k_fg, "am2k_fg")
+        self.am2k_pha = self._load_paths(CONFIG.data.am2k_pha, "am2k_pha")
         
-        self.d646_fg = [os.path.join(CONFIG.data.d646_fg, name) for name in sorted(os.listdir(CONFIG.data.d646_fg))]
-        self.d646_pha = [os.path.join(CONFIG.data.d646_pha, name) for name in sorted(os.listdir(CONFIG.data.d646_pha))]
-        self.d646_num = len(self.d646_fg)
-        self.aim_fg = [os.path.join(CONFIG.data.aim_fg, name) for name in sorted(os.listdir(CONFIG.data.aim_fg))]
-        self.aim_pha = [os.path.join(CONFIG.data.aim_pha, name) for name in sorted(os.listdir(CONFIG.data.aim_pha))]
-        self.aim_num = len(self.aim_fg)
-        self.am2k_fg = [os.path.join(CONFIG.data.am2k_fg, name) for name in sorted(os.listdir(CONFIG.data.am2k_fg))]
-        self.am2k_pha = [os.path.join(CONFIG.data.am2k_pha, name) for name in sorted(os.listdir(CONFIG.data.am2k_pha))]
-        self.am2k_num = len(self.am2k_fg)
-        self.human2k_fg = [os.path.join(CONFIG.data.human2k_fg, name) for name in sorted(os.listdir(CONFIG.data.human2k_fg))]
-        self.human2k_pha = [os.path.join(CONFIG.data.human2k_pha, name) for name in sorted(os.listdir(CONFIG.data.human2k_pha))]
-        self.human2k_num = len(self.human2k_fg)
         self.rim_img = [os.path.join(CONFIG.data.rim_img, name) for name in sorted(os.listdir(CONFIG.data.rim_img))]
         self.rim_pha = [os.path.join(CONFIG.data.rim_pha, name) for name in sorted(os.listdir(CONFIG.data.rim_pha))]
+
+        # Проверка соответствия длины списков и корректировка масок
+        self._validate_and_adjust_paths()
+        
+        self.d646_num = len(self.d646_fg)
+        self.aim_num = len(self.aim_fg)
+        self.am2k_num = len(self.am2k_fg)
         self.rim_num = len(self.rim_img)
 
-        self.transform_imagematte = transforms.Compose(
-            [RandomAffine(degrees=30, scale=[0.8, 1.5], shear=10, flip=0.5),
+        # Определение трансформаций
+        self.transform_imagematte = transforms.Compose([
+            RandomAffine(degrees=30, scale=[0.8, 1.5], shear=10, flip=0.5),
             GenTrimap(),
             RandomCrop((self.crop_size, self.crop_size)),
             RandomJitter(),
             Composite(),
-            ToTensor(phase="train", real_world_aug=CONFIG.data.real_world_aug)])
+            ToTensor(phase="train", real_world_aug=CONFIG.data.real_world_aug)
+        ])
 
-        self.transform_spd = transforms.Compose(
-            [RandomAffine(degrees=30, scale=[0.8, 1.5], shear=10, flip=0.5),
+        self.transform_spd = transforms.Compose([
+            RandomAffine(degrees=30, scale=[0.8, 1.5], shear=10, flip=0.5),
             GenTrimap(),
             RandomCrop((self.crop_size, self.crop_size)),
-            #RandomJitter(),
             Composite_Seg(),
-            ToTensor(phase="train", real_world_aug=CONFIG.data.real_world_aug)])
+            ToTensor(phase="train", real_world_aug=CONFIG.data.real_world_aug)
+        ])
+
+    def _load_paths(self, directory, name):
+        if not os.path.isdir(directory):
+            logging.error(f"Directory for {name} does not exist: {directory}")
+            return []
+        files = sorted(os.listdir(directory))
+        full_paths = [os.path.join(directory, file) for file in files if self._is_image(file)]
+        return full_paths
+
+    def _is_image(self, filename):
+        IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff')
+        return filename.lower().endswith(IMG_EXTENSIONS)
+
+    def _validate_and_adjust_paths(self):
+        """
+        Обеспечивает соответствие между списками fg изображений и pha масок на основе имен файлов.
+        Удаляет маски, для которых нет соответствующих fg изображений.
+        """
+        datasets = [
+            ('am2k_fg', 'am2k_pha'),
+            ('d646_fg', 'd646_pha'),
+            ('aim_fg', 'aim_pha'),
+            # ('human2k_fg', 'human2k_pha'),
+            ('rim_img', 'rim_pha')
+        ]
+
+        for fg_name, pha_name in datasets:
+            fg_list = getattr(self, fg_name, [])
+            pha_list = getattr(self, pha_name, [])
+
+            # Создаём словарь для быстрого поиска масок по базовому имени файла
+            pha_dict = {os.path.splitext(os.path.basename(path))[0]: path for path in pha_list}
+
+            matched_fg = []
+            matched_pha = []
+
+            for fg_path in fg_list:
+                base_name = os.path.splitext(os.path.basename(fg_path))[0]
+                pha_path = pha_dict.get(base_name)
+                if pha_path:
+                    matched_fg.append(fg_path)
+                    matched_pha.append(pha_path)
+                else:
+                    logging.warning(f"Не найдена маска для fg изображения: {fg_path}")
+
+            # Обновляем списки fg и pha с учётом сопоставленных путей
+            setattr(self, fg_name, matched_fg)
+            setattr(self, pha_name, matched_pha)
+
+            # Логируем количество лишних масок, которые не имеют соответствующих fg изображений
+            extra_masks = set(os.path.splitext(os.path.basename(p))[0] for p in pha_list) - set(os.path.splitext(os.path.basename(p))[0] for p in matched_fg)
+            if extra_masks:
+                logging.warning(f"{len(extra_masks)} масок не имеют соответствующих fg изображений для {fg_name}.")
+
+            # Дополнительно проверяем, что после сопоставления количество масок равно количеству fg изображений
+            if len(matched_pha) != len(matched_fg):
+                logging.error(f"Количество сопоставленных масок ({len(matched_pha)}) не совпадает с количеством fg изображений ({len(matched_fg)}) для {fg_name}.")
+                raise ValueError(f"Несоответствие количества масок и fg изображений для {fg_name} и {pha_name}.")
 
     def __getitem__(self, idx):
         if random.random() < 0.5:
@@ -469,14 +526,14 @@ class DataGenerator(Dataset):
             bg = cv2.imread(self.bg20k_bg[idx % self.bg20k_num])
         
         if random.random() < 0.5:
-            if random.random() < 0.25:
-                fg = cv2.imread(self.human2k_fg[idx % self.human2k_num])
-                alpha = cv2.imread(self.human2k_pha[idx % self.human2k_num], 0).astype(np.float32)/255
+            # if random.random() < 0.25:
+                # fg = cv2.imread(self.human2k_fg[idx % self.human2k_num])
+                # alpha = cv2.imread(self.human2k_pha[idx % self.human2k_num], 0).astype(np.float32)/255
 
-                fg, alpha = self._composite_fg_human2k(fg, alpha, idx)
-                image_name = os.path.split(self.human2k_fg[idx % self.human2k_num])[-1]
+                # fg, alpha = self._composite_fg_human2k(fg, alpha, idx)
+                # image_name = os.path.split(self.human2k_fg[idx % self.human2k_num])[-1]
 
-            elif random.random() < 0.5:
+            if random.random() < 0.5:
                 fg = cv2.imread(self.am2k_fg[idx % self.am2k_num])
                 alpha = cv2.imread(self.am2k_pha[idx % self.am2k_num], 0).astype(np.float32)/255
 
@@ -513,43 +570,39 @@ class DataGenerator(Dataset):
 
         return sample
 
-    def _composite_fg_human2k(self, fg, alpha, idx):
-        if np.random.rand() < 0.5:
-            idx2 = np.random.randint(self.human2k_num) + idx
-            fg2 = cv2.imread(self.human2k_fg[idx2 % self.human2k_num])
-            alpha2 = cv2.imread(self.human2k_pha[idx2 % self.human2k_num], 0).astype(np.float32)/255.
-            h, w = alpha.shape
-            fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
-            alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+    def __len__(self):
+        # Определение длины датасета как количества fg изображений
+        return self.coco_num  # Или другое, в зависимости от основного набора данных
 
-            alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
-            if  np.any(alpha_tmp < 1):
-                fg = fg.astype(np.float32) * alpha[:,:,None] + fg2.astype(np.float32) * (1 - alpha[:,:,None])
-                # The overlap of two 50% transparency should be 25%
-                alpha = alpha_tmp
-                fg = fg.astype(np.uint8)
-
-        if np.random.rand() < 0.25:
-            fg = cv2.resize(fg, (1280, 1280), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
-            alpha = cv2.resize(alpha, (1280, 1280), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
-
-        return fg, alpha
+    def safe_read(self, path, flags=cv2.IMREAD_COLOR):
+        """
+        Безопасное чтение изображения. Если изображение не может быть загружено, выбрасывает исключение.
+        """
+        img = cv2.imread(path, flags)
+        if img is None:
+            logging.error(f"Не удалось загрузить изображение: {path}")
+            raise FileNotFoundError(f"Не удалось загрузить изображение: {path}")
+        return img
 
     def _composite_fg_am2k(self, fg, alpha, idx):
         if np.random.rand() < 0.5:
-            idx2 = np.random.randint(self.am2k_num) + idx
-            fg2 = cv2.imread(self.am2k_fg[idx2 % self.am2k_num])
-            alpha2 = cv2.imread(self.am2k_pha[idx2 % self.am2k_num], 0).astype(np.float32)/255.
-            h, w = alpha.shape
-            fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
-            alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+            try:
+                idx2 = np.random.randint(self.am2k_num) + idx
+                fg2_path = self.am2k_fg[idx2 % self.am2k_num]
+                pha2_path = self.am2k_pha[idx2 % self.am2k_num]
+                fg2 = self.safe_read(fg2_path, cv2.IMREAD_COLOR)
+                alpha2 = self.safe_read(pha2_path, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255
+                h, w = alpha.shape
+                fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+                alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
 
-            alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
-            if  np.any(alpha_tmp < 1):
-                fg = fg.astype(np.float32) * alpha[:,:,None] + fg2.astype(np.float32) * (1 - alpha[:,:,None])
-                # The overlap of two 50% transparency should be 25%
-                alpha = alpha_tmp
-                fg = fg.astype(np.uint8)
+                alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
+                if np.any(alpha_tmp < 1):
+                    fg = fg.astype(np.float32) * alpha[:, :, None] + fg2.astype(np.float32) * (1 - alpha[:, :, None])
+                    alpha = alpha_tmp
+                    fg = fg.astype(np.uint8)
+            except Exception as e:
+                logging.error(f"Ошибка в _composite_fg_am2k: {e}")
 
         if np.random.rand() < 0.25:
             fg = cv2.resize(fg, (1280, 1280), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
@@ -559,19 +612,23 @@ class DataGenerator(Dataset):
 
     def _composite_fg_646(self, fg, alpha, idx):
         if np.random.rand() < 0.5:
-            idx2 = np.random.randint(self.d646_num) + idx
-            fg2 = cv2.imread(self.d646_fg[idx2 % self.d646_num])
-            alpha2 = cv2.imread(self.d646_pha[idx2 % self.d646_num], 0).astype(np.float32)/255.
-            h, w = alpha.shape
-            fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
-            alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+            try:
+                idx2 = np.random.randint(self.d646_num) + idx
+                fg2_path = self.d646_fg[idx2 % self.d646_num]
+                pha2_path = self.d646_pha[idx2 % self.d646_num]
+                fg2 = self.safe_read(fg2_path, cv2.IMREAD_COLOR)
+                alpha2 = self.safe_read(pha2_path, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255
+                h, w = alpha.shape
+                fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+                alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
 
-            alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
-            if  np.any(alpha_tmp < 1):
-                fg = fg.astype(np.float32) * alpha[:,:,None] + fg2.astype(np.float32) * (1 - alpha[:,:,None])
-                # The overlap of two 50% transparency should be 25%
-                alpha = alpha_tmp
-                fg = fg.astype(np.uint8)
+                alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
+                if np.any(alpha_tmp < 1):
+                    fg = fg.astype(np.float32) * alpha[:, :, None] + fg2.astype(np.float32) * (1 - alpha[:, :, None])
+                    alpha = alpha_tmp
+                    fg = fg.astype(np.uint8)
+            except Exception as e:
+                logging.error(f"Ошибка в _composite_fg_646: {e}")
 
         if np.random.rand() < 0.25:
             fg = cv2.resize(fg, (1280, 1280), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
@@ -581,25 +638,26 @@ class DataGenerator(Dataset):
 
     def _composite_fg_aim(self, fg, alpha, idx):
         if np.random.rand() < 0.5:
-            idx2 = np.random.randint(self.aim_num) + idx
-            fg2 = cv2.imread(self.aim_fg[idx2 % self.aim_num])
-            alpha2 = cv2.imread(self.aim_pha[idx2 % self.aim_num], 0).astype(np.float32)/255.
-            h, w = alpha.shape
-            fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
-            alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+            try:
+                idx2 = np.random.randint(self.aim_num) + idx
+                fg2_path = self.aim_fg[idx2 % self.aim_num]
+                pha2_path = self.aim_pha[idx2 % self.aim_num]
+                fg2 = self.safe_read(fg2_path, cv2.IMREAD_COLOR)
+                alpha2 = self.safe_read(pha2_path, cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255
+                h, w = alpha.shape
+                fg2 = cv2.resize(fg2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
+                alpha2 = cv2.resize(alpha2, (w, h), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
 
-            alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
-            if  np.any(alpha_tmp < 1):
-                fg = fg.astype(np.float32) * alpha[:,:,None] + fg2.astype(np.float32) * (1 - alpha[:,:,None])
-                # The overlap of two 50% transparency should be 25%
-                alpha = alpha_tmp
-                fg = fg.astype(np.uint8)
+                alpha_tmp = 1 - (1 - alpha) * (1 - alpha2)
+                if np.any(alpha_tmp < 1):
+                    fg = fg.astype(np.float32) * alpha[:, :, None] + fg2.astype(np.float32) * (1 - alpha[:, :, None])
+                    alpha = alpha_tmp
+                    fg = fg.astype(np.uint8)
+            except Exception as e:
+                logging.error(f"Ошибка в _composite_fg_aim: {e}")
 
         if np.random.rand() < 0.25:
             fg = cv2.resize(fg, (1280, 1280), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
             alpha = cv2.resize(alpha, (1280, 1280), interpolation=maybe_random_interp(cv2.INTER_NEAREST))
 
         return fg, alpha
-
-    def __len__(self):
-        return len(self.coco_bg)

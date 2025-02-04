@@ -10,23 +10,28 @@ from torch.nn import functional as F
 import torchvision
 
 import utils
-from   utils import CONFIG
-import networks
+from  utils import CONFIG
 from tqdm import tqdm
-from fvcore.nn import FlopCountAnalysis
-import sys
 
-sys.path.insert(0, './segment-anything')
-sys.path.insert(0, './GroundingDINO')
-from segment_anything.utils.transforms import ResizeLongestSide
-from groundingdino.util.inference import Model
+from sam.segment_anything.utils.transforms import ResizeLongestSide
+from GroundingDINO.groundingdino.util.inference import Model
+from sam2.sam2_video_predictor import SAM2VideoPredictor
+from sam2.build_sam import build_sam2_video_predictor_hf
+
+from networks.generator_m2m_sam_2 import Sam2M2m
+
+VALID_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.gif']
+
+def is_image(file_name):
+    """Проверка, является ли файл изображением на основе расширения."""
+    return any(file_name.lower().endswith(ext) for ext in VALID_IMAGE_EXTENSIONS)
 
 transform = ResizeLongestSide(1024)
 
 def single_ms_inference(model, image_dict, args):
 
-    with torch.no_grad():
-        feas, pred, post_mask = model.forward_inference(image_dict)
+    with torch.no_grad():        
+        _, pred, post_mask = model.forward_bench(image_dict['image'], image_dict['bbox'])
         if args.sam:
             post_mask = post_mask[0].cpu().numpy() * 255
             return post_mask.transpose(1, 2, 0).astype('uint8')
@@ -34,7 +39,10 @@ def single_ms_inference(model, image_dict, args):
         alpha_pred_os8 = alpha_pred_os8[..., : image_dict['pad_shape'][0], : image_dict['pad_shape'][1]]
         alpha_pred_os4 = alpha_pred_os4[..., : image_dict['pad_shape'][0], : image_dict['pad_shape'][1]]
         alpha_pred_os1 = alpha_pred_os1[..., : image_dict['pad_shape'][0], : image_dict['pad_shape'][1]]
+        
+        post_mask = post_mask[..., : image_dict['pad_shape'][0], : image_dict['pad_shape'][1]]
 
+        post_mask = F.interpolate(post_mask, image_dict['ori_shape'], mode="bilinear", align_corners=False)
         alpha_pred_os8 = F.interpolate(alpha_pred_os8, image_dict['ori_shape'], mode="bilinear", align_corners=False)
         alpha_pred_os4 = F.interpolate(alpha_pred_os4, image_dict['ori_shape'], mode="bilinear", align_corners=False)
         alpha_pred_os1 = F.interpolate(alpha_pred_os1, image_dict['ori_shape'], mode="bilinear", align_corners=False)
@@ -69,6 +77,7 @@ def single_ms_inference(model, image_dict, args):
 
 def generator_tensor_dict(image_path, alpha_path, args):
     # read images
+    
     image = cv2.imread(image_path)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     original_size = image.shape[:2]
@@ -189,7 +198,10 @@ if __name__ == '__main__':
     utils.make_dir(args.output)
 
     # build model
-    model = networks.get_generator_m2m(seg=CONFIG.model.arch.seg, m2m=CONFIG.model.arch.m2m)
+    
+    
+    model_video_sam2: SAM2VideoPredictor = build_sam2_video_predictor_hf("facebook/sam2.1-hiera-base-plus")
+    model = Sam2M2m(seg=model_video_sam2, device="cuda")
     model.cuda()
 
     # load checkpoint
@@ -210,6 +222,9 @@ if __name__ == '__main__':
         image_dir = CONFIG.benchmark.him2k_img
         alpha_dir = CONFIG.benchmark.him2k_alpha
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             image_path = os.path.join(image_dir, image_name)
             alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0])
             output_path = os.path.join(args.output, os.path.splitext(image_name)[0])
@@ -220,12 +235,14 @@ if __name__ == '__main__':
                 image_dict = generator_tensor_dict(image_path, alpha_single_path, args)
                 alpha_pred = single_ms_inference(model, image_dict, args)
                 cv2.imwrite(os.path.join(output_path, alpha_single_dir), alpha_pred)
-            
+
     elif args.benchmark == 'him2k_comp':
         image_dir = CONFIG.benchmark.him2k_comp_img
         alpha_dir = CONFIG.benchmark.him2k_comp_alpha
-    
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             image_path = os.path.join(image_dir, image_name)
             alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0])
             output_path = os.path.join(args.output, os.path.splitext(image_name)[0])
@@ -241,41 +258,53 @@ if __name__ == '__main__':
         image_dir = CONFIG.benchmark.rwp636_img
         alpha_dir = CONFIG.benchmark.rwp636_alpha
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             image_path = os.path.join(image_dir, image_name)
-            alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0]+'.png')
+            alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0] + '.png')
             image_dict = generator_tensor_dict(image_path, alpha_path, args)
             alpha_pred = single_ms_inference(model, image_dict, args)
-            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0]+'.png'), alpha_pred)
+            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0] + '.png'), alpha_pred)
 
     elif args.benchmark == 'ppm100':
         image_dir = CONFIG.benchmark.ppm100_img
         alpha_dir = CONFIG.benchmark.ppm100_alpha
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             image_path = os.path.join(image_dir, image_name)
             alpha_path = os.path.join(alpha_dir, image_name)
             image_dict = generator_tensor_dict(image_path, alpha_path, args)
             alpha_pred = single_ms_inference(model, image_dict, args)
-            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0]+'.png'), alpha_pred)
+            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0] + '.png'), alpha_pred)
 
     elif args.benchmark == 'am2k':
         image_dir = CONFIG.benchmark.am2k_img
         alpha_dir = CONFIG.benchmark.am2k_alpha
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             image_path = os.path.join(image_dir, image_name)
-            alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0]+'.png')
+            alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0] + '.png')
             image_dict = generator_tensor_dict(image_path, alpha_path, args)
             alpha_pred = single_ms_inference(model, image_dict, args)
-            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0]+'.png'), alpha_pred)
+            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0] + '.png'), alpha_pred)
 
     elif args.benchmark == 'pm10k':
         image_dir = CONFIG.benchmark.pm10k_img
         alpha_dir = CONFIG.benchmark.pm10k_alpha
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             image_path = os.path.join(image_dir, image_name)
-            alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0]+'.png')
+            alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0] + '.png')
             image_dict = generator_tensor_dict(image_path, alpha_path, args)
             alpha_pred = single_ms_inference(model, image_dict, args)
-            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0]+'.png'), alpha_pred)
+            cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0] + '.png'), alpha_pred)
 
     elif args.benchmark == 'rw100':
         image_dir = CONFIG.benchmark.rw100_img
@@ -286,17 +315,20 @@ if __name__ == '__main__':
             index_data = json.load(open(index_dir, 'r'))
             text_data = json.load(open(text_dir, 'r'))
         for i, image_name in enumerate(tqdm(os.listdir(image_dir))):
+            if not is_image(image_name):
+                continue  # Пропускаем файл, если это не изображение
+
             if args.prompt == 'text':
                 image_path = os.path.join(image_dir, image_name)
                 text_label = text_data[os.path.splitext(image_name)[0]]
                 index_label = index_data[text_label['image_name']]
-                text = text_label['expressions'][index_label]
+                text = text_label['expressions'][index_label['index']]
                 image_dict = generator_tensor_dict_from_text(image_path, text, grounding_dino_model, args)
                 alpha_pred = single_ms_inference(model, image_dict, args)
-                cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0]+'.png'), alpha_pred)
+                cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0] + '.png'), alpha_pred)
             else:
                 image_path = os.path.join(image_dir, image_name)
-                alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0]+'.png')
+                alpha_path = os.path.join(alpha_dir, os.path.splitext(image_name)[0] + '.png')
                 image_dict = generator_tensor_dict(image_path, alpha_path, args)
                 alpha_pred = single_ms_inference(model, image_dict, args)
-                cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0]+'.png'), alpha_pred)
+                cv2.imwrite(os.path.join(args.output, os.path.splitext(image_name)[0] + '.png'), alpha_pred)

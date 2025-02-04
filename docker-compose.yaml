@@ -1,0 +1,19 @@
+services:
+  matting_anything:
+    build: .
+    container_name: MattingAnything
+    shm_size: '4gb'
+    volumes:
+      - .:/app
+    ports:
+      - "7860:7860"
+      - "6006:6006"
+      - "8888:8888"
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

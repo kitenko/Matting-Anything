@@ -72,21 +72,21 @@ def compute_connectivity_error(pred, target, trimap, step=0.1):
     h, w = pred.shape
 
     thresh_steps = list(np.arange(0, 1 + step, step))
-    l_map = np.ones_like(pred, dtype=np.float) * -1
+    l_map = np.ones_like(pred, dtype=np.float64) * -1
     for i in range(1, len(thresh_steps)):
-        pred_alpha_thresh = (pred >= thresh_steps[i]).astype(np.int)
-        target_alpha_thresh = (target >= thresh_steps[i]).astype(np.int)
+        pred_alpha_thresh = (pred >= thresh_steps[i]).astype(np.int64)
+        target_alpha_thresh = (target >= thresh_steps[i]).astype(np.int64)
 
-        omega = getLargestCC(pred_alpha_thresh * target_alpha_thresh).astype(np.int)
-        flag = ((l_map == -1) & (omega == 0)).astype(np.int)
+        omega = getLargestCC(pred_alpha_thresh * target_alpha_thresh).astype(np.int64)
+        flag = ((l_map == -1) & (omega == 0)).astype(np.int64)
         l_map[flag == 1] = thresh_steps[i - 1]
 
     l_map[l_map == -1] = 1
 
     pred_d = pred - l_map
     target_d = target - l_map
-    pred_phi = 1 - pred_d * (pred_d >= 0.15).astype(np.int)
-    target_phi = 1 - target_d * (target_d >= 0.15).astype(np.int)
+    pred_phi = 1 - pred_d * (pred_d >= 0.15).astype(np.int64)
+    target_phi = 1 - target_d * (target_d >= 0.15).astype(np.int64)
     loss = np.sum(np.abs(pred_phi - target_phi)[trimap == 128])
 
     return loss / 1000.
