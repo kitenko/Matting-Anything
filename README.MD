@@ -36,6 +36,23 @@ To start training the model, run the following command from the project root:
 
 This command will automatically build a container with all required dependencies, so there is no need to install anything manually.
 
+## Download Pretrained Model Weights
+
+Before running the demo, you need to download the pretrained model weights from Google Drive:
+
+🔗 **[Download Weights from Google Drive](https://drive.google.com/file/d/1pw7-iPKfnVlrIZ9Cs4ahmx8oTZBhpNCT/view?usp=sharing)**
+
+### Steps to Use the Weights:
+1. Click the link above and download the `.pth` file.
+2. Place the downloaded weights in a directory of your choice (e.g., `checkpoints/`).
+3. When running the demo, specify the path to the weights:
+
+   ```bash
+   ./run.sh python gradio_app.py --model-weights path/to/weights.pth
+   ```
+
+Make sure to replace `path/to/weights.pth` with the actual location of the downloaded file.
+
 ## Demo
 
 To launch the demo, execute the following command:
@@ -64,14 +81,14 @@ Running on public URL: https://5b65a2e5c4a842a350.gradio.live
 This example shows the **Gradio UI for image matting**:
 
 <div align="center">
-  <img src="./assets/gradio_image_demo.png" width="80%" alt="Gradio Image Matting Interface"/>
+  <img src="assets/gradio_image_demo.png" width="80%" alt="Gradio Image Matting Interface"/>
 </div>
 
 #### Video Matting Interface
 This example shows the **Gradio UI for video matting**:
 
 <div align="center">
-  <img src="./assets/gradio_video_demo.png" width="80%" alt="Gradio Video Matting Interface"/>
+  <img src="assets/gradio_video_demo.png" width="80%" alt="Gradio Video Matting Interface"/>
 </div>
 
 ## Getting Started
