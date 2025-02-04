@@ -4,7 +4,7 @@ import numbers
 import random
 import logging
 import numpy as np
-import imgaug.augmenters as iaa
+import albumentations as A
 
 import torch
 from torch.utils.data import Dataset
@@ -34,15 +34,15 @@ class ToTensor(object):
         self.std = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
         self.phase = phase
         if real_world_aug:
-            self.RWA = iaa.SomeOf((1, None), [
-                iaa.LinearContrast((0.6, 1.4)),
-                iaa.JpegCompression(compression=(0, 60)),
-                iaa.GaussianBlur(sigma=(0.0, 3.0)),
-                iaa.AdditiveGaussianNoise(scale=(0, 0.1*255))
-            ], random_order=True)
+            self.RWA = A.Compose([
+                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.4, p=0.2),
+                A.GaussianBlur(blur_limit=(3, 7), p=0.2),
+                A.GaussNoise(var_limit=(10.0, 50.0), p=0.2),
+                A.ImageCompression(quality_range=(60, 95), p=0.3)
+            ])
         else:
             self.RWA = None
-    
+
     def get_box_from_alpha(self, alpha_final):
         bi_mask = np.zeros_like(alpha_final)
         bi_mask[alpha_final > 0.5] = 1
@@ -59,37 +59,30 @@ class ToTensor(object):
             y_max = np.max(fg_set[0])
         bbox = np.array([x_min, y_min, x_max, y_max])
         return bbox
-    
+
     def __call__(self, sample):
-        # convert GBR images to RGB
+        # Конвертация изображения из GBR в RGB
         image, alpha, trimap = sample['image'][:,:,::-1], sample['alpha'], sample['trimap']
         
-        alpha[alpha < 0 ] = 0
-        alpha[alpha > 1] = 1
-        
+        alpha = np.clip(alpha, 0, 1)
+
         bbox = self.get_box_from_alpha(alpha)
 
         if self.phase == 'train' and self.RWA is not None and np.random.rand() < 0.5:
-            image[image > 255] = 255
-            image[image < 0] = 0
-            image = np.round(image).astype(np.uint8)
-            image = np.expand_dims(image, axis=0)
-            image = self.RWA(images=image)
-            image = image[0, ...]
+            image = np.clip(image, 0, 255).astype(np.uint8)
+            augmented = self.RWA(image=image)
+            image = augmented['image']
 
-        # swap color axis because
-        # numpy image: H x W x C
-        # torch image: C X H X W
+        # Меняем порядок осей, чтобы получить формат C x H x W
         image = image.transpose((2, 0, 1)).astype(np.float32)
         alpha = np.expand_dims(alpha.astype(np.float32), axis=0)
         trimap[trimap < 85] = 0
         trimap[trimap >= 170] = 2
         trimap[trimap >= 85] = 1
-        # normalize image
+        # Нормализуем изображение
         image /= 255.
 
         if self.phase == "train":
-            # convert GBR images to RGB
             fg = sample['fg'][:,:,::-1].transpose((2, 0, 1)).astype(np.float32) / 255.
             sample['fg'] = torch.from_numpy(fg).sub_(self.mean).div_(self.std)
             bg = sample['bg'][:,:,::-1].transpose((2, 0, 1)).astype(np.float32) / 255.

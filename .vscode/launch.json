@@ -12,7 +12,7 @@
             "console": "integratedTerminal",
             "args": [
                 "--phase", "train",
-                "--config", "/app/config/MAM-ViTB-8gpu.toml"
+                "--config", "config/MAM-ViTB-8gpu.toml"
             ],
             "justMyCode": false,
         },
@@ -24,7 +24,7 @@
             "program": "${workspaceFolder}/inference_benchmark.py",
             "console": "integratedTerminal",
             "args": [
-                "--checkpoint", "/app/checkpoints/0.5_for_os8_weigths_return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_8500.pth",
+                "--checkpoint", "/app/checkpoints/return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_30000.pth",
                 "--config", "/app/config/MAM-ViTB-8gpu.toml",
                 "--benchmark", "am2k",
                 "--output", "outputs/sam_2_am2k",

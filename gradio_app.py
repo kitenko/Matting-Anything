@@ -1,10 +1,12 @@
+import av
 import cv2
 import numpy as np
 import gradio as gr
 import tempfile
 from typing import List, Tuple, Optional
 
-from moviepy import ImageSequenceClip
+import fractions
+
 
 # Import your predictor/inference class
 from inference import MAMInferencer
@@ -13,13 +15,6 @@ from sam2.build_sam import build_sam2_video_predictor_hf
 
 # Build the video predictor instance using a SAM2 model from HuggingFace.
 model_video_sam2: SAM2VideoPredictor = build_sam2_video_predictor_hf("facebook/sam2.1-hiera-base-plus")
-
-# Create an image inference model that uses the video SAM2 predictor.
-# Note: This object is shared with the video predictor model.
-model_image = MAMInferencer(
-    model_video_sam2,
-    "/app/checkpoints/return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_30000.pth"
-)
 
 # Define types for clarity
 Point = Tuple[int, int]   # Coordinates of a point (x, y)
@@ -210,7 +205,7 @@ def run_prediction(
         guidance_mode=guidance_mode,
         background_type=background_type
     )
-    return com_img, green_img, alpha_rgb
+    return com_img, green_img, alpha_rgb, selected_points, bounding_boxes
 
 def update_ui(tool: str):
     """
@@ -475,34 +470,56 @@ def call_video_predict(video_info: dict, video_annotations: dict) -> str:
     video_predict(video_info.get("video_path", ""), all_clicks, all_boxes)
     return "Video predict called. Check console for parameters."
 
-def write_video(frames: np.ndarray, video_path: str) -> str:
+def write_video_av(frames: np.ndarray, video_path: str) -> str:
     """
-    Write a video file from an array of frames.
+    Writes a video from an array of frames using PyAV.
 
-    Args:
+    Arguments:
         frames: An array of frames (in RGB format).
-        video_path: Path to the original video (to extract metadata).
+        video_path: The path to the source video (to extract metadata such as FPS).
 
     Returns:
-        The path to the temporary saved video file.
+        The path to the temporarily saved video file.
     """
-    # Extract FPS from the original video.
+    # Extract FPS from the source video.
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise IOError(f"Cannot open video: {video_path}")
+        raise IOError(f"Failed to open video: {video_path}")
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
-    
-    # Create a temporary file with .mp4 extension.
+
+    # Determine frame dimensions.
+    height, width = frames[0].shape[:2]
+
+    # Create a temporary file with the .mp4 extension.
     temp_path = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False).name
-    
-    # Create a video clip from the sequence of frames.
-    clip = ImageSequenceClip(list(frames), fps=fps)
-    
-    # Write the video file using the libx264 codec.
-    clip.write_videofile(temp_path, codec="libx264", audio=False)
-    
+
+    # Open a container for writing.
+    container = av.open(temp_path, mode='w')
+
+    # Add a video stream using the libx264 codec.
+    rate = fractions.Fraction(fps).limit_denominator()
+    stream = container.add_stream('libx264', rate=rate)
+    stream.width = width
+    stream.height = height
+    stream.pix_fmt = 'yuv420p'  # Required format for most players
+
+    # Encoding and adding frames.
+    for frame in frames:
+        # Create a VideoFrame object from the numpy array (note that the frame format is 'rgb24').
+        video_frame = av.VideoFrame.from_ndarray(frame, format='rgb24')
+        # When encoding, PyAV converts the frame to the required format (e.g., yuv420p).
+        for packet in stream.encode(video_frame):
+            container.mux(packet)
+
+    # Finalize encoding: flush buffers.
+    for packet in stream.encode():
+        container.mux(packet)
+
+    # Close the container.
+    container.close()
     return temp_path
+
 
 def visualize_video_predictions(video_path: str, predictions: dict) -> np.ndarray:
     """
@@ -542,7 +559,7 @@ def predict_and_visualize_video(video_info: dict, video_annotations: dict) -> st
     all_clicks, all_boxes = collect_annotations(video_annotations)
     predictions = video_predict(video_info.get("video_path", ""), all_clicks, all_boxes)
     vis_frames = visualize_video_predictions(video_info.get("video_path", ""), predictions)
-    video_file = write_video(vis_frames, video_info.get("video_path", ""))
+    video_file = write_video_av(vis_frames, video_info.get("video_path", ""))
     return video_file
 
 # -------------- Main Gradio Interface --------------
@@ -703,7 +720,7 @@ def main() -> None:
                 predict_button_video.click(
                     run_prediction,
                     inputs=[original_frame, selected_points_video, bounding_boxes_video, guidance_mode_video, background_type_video],
-                    outputs=[com_img_video, green_img_video, alpha_rgb_video]
+                    outputs=[com_img_video, green_img_video, alpha_rgb_video, selected_points_video, bounding_boxes_video]
                 )
                 # Update the UI for video annotations when tool changes.
                 tool_selector_video.change(
@@ -719,7 +736,30 @@ def main() -> None:
                     inputs=[video_info, video_annotations],
                     outputs=[video_output]
                 )
-        demo.launch(debug=True)
+        demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
+        
+
+# Create an image inference model that uses the video SAM2 predictor.
+# Note: This object is shared with the video predictor model.
+model_image = None
+
+def init_models(model_weights_path: str) -> None:
+    global model_image
+    model_image = MAMInferencer(model_video_sam2, model_weights_path)
+
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Image and Video Alpha Channel Prediction")
+    parser.add_argument(
+        "--model-weights",
+        type=str,
+        required=True,
+        help="Path to the model weights file (e.g., /app/checkpoints/your_model.pth)"
+    )
+    args = parser.parse_args()
+
+    init_models(args.model_weights)
+
     main()

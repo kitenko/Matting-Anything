@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   matting_anything:
     build: .
@@ -7,6 +5,10 @@ services:
     shm_size: '4gb'
     volumes:
       - .:/app
+    ports:
+      - "7860:7860"
+      - "6006:6006"
+      - "8888:8888"
     tty: true
     deploy:
       resources:

@@ -26,6 +26,35 @@ class Sam2M2m(nn.Module):
         self.m2m = SAM_Decoder_Deep()
         self.predictor = SAM2TorchPredictor(seg)
         self.transform_mask = ResizeMaskWithAspect(low_resolution_mask)
+        
+    def forward_bench(self, image, bbox, point=None):
+        """
+        Forward pass for a batch of images with provided box prompts.
+
+        Args:
+            image (np.ndarray): Input image or batch of images.
+            guidance (torch.Tensor): Box prompts for the predictor.
+
+        Returns:
+            torch.Tensor: Prediction output from the M2M network.
+        """
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            features, all_masks, _, all_low_res_masks = self.predictor.train_step(
+                image, bbox=bbox
+            )
+            
+            masks = self.threshold_mask(all_masks)
+            low_res_masks = self.threshold_mask(all_low_res_masks)
+
+            # Add channel dimension if needed.
+            if masks.ndim == 3:
+                masks = masks.unsqueeze(1)
+            if low_res_masks.ndim == 3:
+                low_res_masks = low_res_masks.unsqueeze(1)
+        
+        prediction = self.m2m(features, image, all_low_res_masks)
+        return features, prediction, masks
+
 
     def forward(self, image, guidance):
         """
@@ -39,8 +68,8 @@ class Sam2M2m(nn.Module):
             torch.Tensor: Prediction output from the M2M network.
         """
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            features, _, _, all_low_res_masks = self.predictor.run_predict(
-                image, box=guidance
+            features, _, _, all_low_res_masks = self.predictor.train_step(
+                image, bbox=guidance
             )
         prediction = self.m2m(features, image, all_low_res_masks)
         return prediction

@@ -5,7 +5,6 @@ import os
 import random
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.utils as nn_utils
 import torch.backends.cudnn as cudnn
@@ -15,8 +14,8 @@ from tqdm import tqdm
 
 import utils
 from   utils import CONFIG
-import networks
-from networks.generator_m2m_sam_2 import sam2_get_generator_m2m
+from networks.generator_m2m_sam_2 import Sam2M2m
+from sam2.build_sam import build_sam2_video_predictor_hf
 
 class Trainer(object):
 
@@ -55,8 +54,8 @@ class Trainer(object):
                                'grad':None,
                                'gabor':None}
 
-        self.grad_filter = torch.tensor(utils.get_gradfilter()).cuda()
-        self.gabor_filter = torch.tensor(utils.get_gaborfilter(16)).cuda()
+        self.grad_filter = torch.from_numpy(utils.get_gradfilter()).cuda()
+        self.gabor_filter = torch.from_numpy(utils.get_gaborfilter(16)).cuda()
 
         self.gauss_filter = torch.tensor([[1., 4., 6., 4., 1.],
                                         [4., 16., 24., 16., 4.],
@@ -84,9 +83,10 @@ class Trainer(object):
 
 
     def build_model(self):
+        
+        sam2_model = build_sam2_video_predictor_hf("facebook/sam2.1-hiera-base-plus")
 
-        # self.G = networks.get_generator_m2m(seg=self.model_config.arch.seg, m2m=self.model_config.arch.m2m)
-        self.G = sam2_get_generator_m2m(seg=self.model_config.arch.seg, m2m=self.model_config.arch.m2m)
+        self.G = Sam2M2m(sam2_model, device="cuda")
         
         self.G.cuda()
 

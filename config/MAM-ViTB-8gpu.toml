@@ -1,7 +1,6 @@
 # Refer to utils/config.py for definition and options.
 
-version = "0.5_for_os8_weigths_return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True"
-# test = "test"
+version = "last_train"
 wandb = false
 
 [model]
@@ -24,7 +23,7 @@ G_lr = 7e-5
 rec_weight = 1.0
 lap_weight = 1.0
 # Uncomment to resume training
-resume_checkpoint = "/app/checkpoints/return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_20000"
+resume_checkpoint = "/app/checkpoints/0.5_for_os8_weigths_return_cousine_pre_train_grad_true_new_shedule_real_world_aug_full_data_sam_2_multiple_mask_True/model_step_8500"
 reset_lr = true
 lr_plateau_patience = 350
 
